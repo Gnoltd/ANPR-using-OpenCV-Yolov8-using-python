@@ -4,6 +4,7 @@ Embeds video feed inside the window; shows YOLO & OCR confidence per detection.
 """
 from __future__ import annotations
 
+import os
 import queue
 import time
 import tkinter as tk
@@ -315,8 +316,10 @@ class App(tk.Tk):
     @staticmethod
     def _detect_cameras(max_test: int = 5) -> list:
         found = []
-        old_level = cv2.getLogLevel()
-        cv2.setLogLevel(cv2.LOG_LEVEL_ERROR)  # suppress WARN during probe
+        # Redirect stderr at the OS level to suppress VIDEOIO(DSHOW) warnings
+        devnull = open(os.devnull, 'w')
+        old_fd = os.dup(2)
+        os.dup2(devnull.fileno(), 2)
         try:
             for i in range(max_test):
                 cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
@@ -324,7 +327,9 @@ class App(tk.Tk):
                     found.append(str(i))
                     cap.release()
         finally:
-            cv2.setLogLevel(old_level)
+            os.dup2(old_fd, 2)
+            os.close(old_fd)
+            devnull.close()
         return found or ["0"]
 
     # ── Button handlers ───────────────────────────────────────────────────────
