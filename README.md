@@ -163,7 +163,5 @@ Edit `env.py` to tune detection behaviour:
 ---
 
 ## Credits
-
-- Group 4 MET5
 - [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics)
 - [JaidedAI EasyOCR](https://github.com/JaidedAI/EasyOCR)
