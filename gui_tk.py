@@ -385,6 +385,8 @@ class App(tk.Tk):
 
     # ── Workers (run in background threads) ───────────────────────────────────
     def _image_worker(self, path: str):
+        out = None
+        det_infos = []
         try:
             from ANPR_Yolo.DetectNP import (detect_fn, filter_text,
                                              lookup_owner, ocr_it)
@@ -394,12 +396,17 @@ class App(tk.Tk):
             if img is None:
                 raise FileNotFoundError(path)
 
-            dets = detect_fn(img)
             out = img.copy()
-            det_infos = []
+            try:
+                dets = detect_fn(img)
+            except Exception:
+                dets = []
 
             for d in dets:
-                raw_txt, ocr_info = ocr_it(d["crop"])
+                try:
+                    raw_txt, ocr_info = ocr_it(d["crop"])
+                except Exception:
+                    raw_txt, ocr_info = "", {}
                 plate = filter_text(raw_txt)
                 yolo_conf = d["conf"]
                 ocr_conf = (ocr_info or {}).get("best_conf", 0.0)
@@ -410,13 +417,14 @@ class App(tk.Tk):
                 x1, y1, x2, y2 = d["bbox"]
                 color = (0, 220, 100)
                 cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
-                main_lbl = (f"{plate}  {yolo_conf:.0%}" if plate
-                            else f"plate  {yolo_conf:.0%}")
-                sub_lbl = owner or "Unknown owner"
-                cv2.putText(out, main_lbl, (x1, max(20, y1 - 22)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.58, color, 2)
-                cv2.putText(out, sub_lbl, (x1, max(6, y1 - 6)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.44, (180, 180, 180), 1)
+                if plate and owner:
+                    label = f"{plate} | {owner}"
+                elif plate:
+                    label = f"{plate} | Owner : Unknown"
+                else:
+                    label = f"{d.get('cls_name', 'plate')} {yolo_conf:.2f}"
+                cv2.putText(out, label, (x1, max(0, y1 - 8)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
                 det_infos.append({
                     "plate": plate, "yolo_conf": yolo_conf,
@@ -425,11 +433,11 @@ class App(tk.Tk):
                 if plate:
                     self._q.put(("hist", plate, yolo_conf, time.time()))
 
-            self._q.put(("frame", out.copy(), det_infos, None))
-
         except Exception as exc:
             self._q.put(("error", str(exc)))
         finally:
+            if out is not None:
+                self._q.put(("frame", out.copy(), det_infos, None))
             self._q.put(("done",))
 
     def _stream_worker(self, source):
@@ -516,13 +524,14 @@ class App(tk.Tk):
                     x1, y1, x2, y2 = bb
                     color = (0, 220, 100)
                     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                    main_lbl = (f"{plate}  {yolo_conf:.0%}" if plate
-                                else f"plate  {yolo_conf:.0%}")
-                    sub_lbl = owner or "Unknown"
-                    cv2.putText(frame, main_lbl, (x1, max(20, y1 - 22)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.56, color, 2)
-                    cv2.putText(frame, sub_lbl, (x1, max(6, y1 - 6)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 180, 180), 1)
+                    if plate and owner:
+                        label = f"{plate} | {owner}"
+                    elif plate:
+                        label = f"{plate} | Owner : Unknown"
+                    else:
+                        label = f"{d.get('cls_name', 'plate')} {yolo_conf:.2f}"
+                    cv2.putText(frame, label, (x1, max(0, y1 - 8)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
                     # debounced history log
                     if plate and (idx - seen.get(plate, -debounce * 2)) > debounce:

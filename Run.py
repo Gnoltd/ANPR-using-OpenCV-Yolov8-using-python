@@ -17,7 +17,7 @@ if "ANPR_Yolo" not in sys.modules:
     sys.modules["ANPR_Yolo"] = _pkg
 # ───────────────────────────────────────────────────────────────────────────
 
-from ANPR_Yolo.gui_tk import main  # type: ignore[import]  # noqa: E402
+from ANPR_Yolo.gui_tk import main  # /noqa: E40
 
 if __name__ == "__main__":
     main()
