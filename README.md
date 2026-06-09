@@ -36,7 +36,7 @@ Supports still images, video files, and live webcam — all with per-detection c
 | `pandas` | Results CSV / owner registry |
 | `numpy` | Array handling |
 
-Python **3.9 or newer** is required.
+Python **3.9 – 3.12** is recommended (`easyocr` and `ultralytics` have the best wheel support on these versions).
 
 ---
 
@@ -49,17 +49,46 @@ git clone https://github.com/Gnoltd/ANPR-using-OpenCV-Yolov8-using-python ANPR_Y
 ```
 
 > The project uses `from ANPR_Yolo.xxx import ...` internally, so the folder name matters.
-> If you cloned with the default name, just rename the folder:
+> If you cloned with the default name, rename it first:
+>
+> ```powershell
+> # PowerShell (Windows)
+> Rename-Item ANPR-using-OpenCV-Yolov8-using-python ANPR_Yolo
+> ```
 > ```bash
-> mv ANPR-using-OpenCV-Yolov8-using-python ANPR_Yolo   # Linux / Mac
-> Rename-Item ANPR-using-OpenCV-Yolov8-using-python ANPR_Yolo  # PowerShell
+> # bash (Linux / Mac)
+> mv ANPR-using-OpenCV-Yolov8-using-python ANPR_Yolo
 > ```
 
 ### 2. Install dependencies
 
+Choose the method that matches your Python setup:
+
+#### Option A — uv (recommended on Windows)
+
+[`uv`](https://github.com/astral-sh/uv) is a fast Python/package manager. If you have it installed:
+
+```powershell
+# inside the ANPR_Yolo folder
+uv venv --python 3.11          # create a virtual environment with Python 3.11
+.venv\Scripts\activate         # activate it
+uv pip install ultralytics easyocr opencv-python Pillow pandas numpy
+```
+
+#### Option B — pip (standard)
+
 ```bash
 pip install ultralytics easyocr opencv-python Pillow pandas numpy
 ```
+
+> **Windows "python not recognized" error?**
+> Python may not be on your PATH. Try one of these instead:
+> ```powershell
+> python3.11 -m pip install ...   # if you installed Python 3.11
+> py -3.11 -m pip install ...     # using the Windows py launcher
+> ```
+> Or add Python to your PATH:
+> **Settings → System → Advanced system settings → Environment Variables → Path → Add** the folder containing `python.exe` (e.g. `C:\Python311\`).
 
 ### 3. Add the model weights
 
@@ -68,20 +97,27 @@ Place `best.pt` (YOLOv8 weights trained on license plates) inside the `ANPR_Yolo
 Download the pre-trained weights: see the [Releases](https://github.com/Gnoltd/ANPR-using-OpenCV-Yolov8-using-python/releases) page or the original project notes.
 
 ```
-ANPR_Yolo/
-├── best.pt          ← put the model here
-├── Run.py
-├── gui_tk.py
-└── ...
+parent_folder/
+└── ANPR_Yolo/
+    ├── best.pt      ← put the model here
+    ├── Run.py
+    ├── gui_tk.py
+    └── ...
 ```
 
 ### 4. Run
 
-Run the following command **from the parent directory** that contains `ANPR_Yolo/`:
+Run the command **from the parent folder** that contains `ANPR_Yolo/` (one level above the project):
 
-```bash
-# Windows (PowerShell / CMD)
+```powershell
+# Windows — if virtual environment is active
 python -m ANPR_Yolo.Run
+
+# Windows — uv without activating venv
+uv run python -m ANPR_Yolo.Run
+
+# Windows — explicit python command
+python3.11 -m ANPR_Yolo.Run
 
 # Linux / Mac
 python3 -m ANPR_Yolo.Run
