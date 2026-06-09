@@ -693,7 +693,11 @@ class App(tk.Tk):
         dlg.configure(bg=PANEL)
         dlg.resizable(False, False)
         dlg.grab_set()
-        dlg.geometry("440x300")
+        dlg.geometry("440x320")
+
+        # Pack button bar at bottom first so it always stays visible
+        btn_fr = tk.Frame(dlg, bg=PANEL, padx=20, pady=12)
+        btn_fr.pack(side="bottom", fill="x")
 
         fr = tk.Frame(dlg, bg=PANEL, padx=20, pady=14)
         fr.pack(fill="both", expand=True)
@@ -751,10 +755,7 @@ class App(tk.Tk):
 
         fr.columnconfigure(1, weight=1)
 
-        # ── Action buttons ───────────────────────────────────────────────────
-        btn_fr = tk.Frame(dlg, bg=PANEL, padx=20, pady=(0, 14))
-        btn_fr.pack(fill="x")
-
+        # ── Action buttons (btn_fr already packed at bottom) ─────────────────
         def on_save():
             try:
                 df2 = load_registry()
