@@ -42,23 +42,14 @@ Python **3.9 – 3.12** is recommended (`easyocr` and `ultralytics` have the bes
 
 ## Setup
 
-### 1. Clone — the folder **must** be named `ANPR_Yolo`
+### 1. Clone
 
 ```bash
-git clone https://github.com/Gnoltd/ANPR-using-OpenCV-Yolov8-using-python ANPR_Yolo
+git clone https://github.com/Gnoltd/ANPR-using-OpenCV-Yolov8-using-python
+cd ANPR-using-OpenCV-Yolov8-using-python
 ```
 
-> The project uses `from ANPR_Yolo.xxx import ...` internally, so the folder name matters.
-> If you cloned with the default name, rename it first:
->
-> ```powershell
-> # PowerShell (Windows)
-> Rename-Item ANPR-using-OpenCV-Yolov8-using-python ANPR_Yolo
-> ```
-> ```bash
-> # bash (Linux / Mac)
-> mv ANPR-using-OpenCV-Yolov8-using-python ANPR_Yolo
-> ```
+> No renaming needed — `Run.py` automatically registers the package under the correct name at startup.
 
 ### 2. Install dependencies
 
@@ -107,20 +98,19 @@ parent_folder/
 
 ### 4. Run
 
-Run the command **from the parent folder** that contains `ANPR_Yolo/` (one level above the project):
+**Easiest — double-click `start.bat`** (Windows).
+
+Or run from the **project folder** in a terminal:
 
 ```powershell
-# Windows — if virtual environment is active
-python -m ANPR_Yolo.Run
+# Windows — venv active
+python Run.py
 
-# Windows — uv without activating venv
-uv run python -m ANPR_Yolo.Run
-
-# Windows — explicit python command
-python3.11 -m ANPR_Yolo.Run
+# Windows — using the venv directly (no activation needed)
+.venv\Scripts\python.exe Run.py
 
 # Linux / Mac
-python3 -m ANPR_Yolo.Run
+python3 Run.py
 ```
 
 The GUI window will open.
