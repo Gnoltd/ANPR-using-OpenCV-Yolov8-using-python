@@ -28,9 +28,11 @@ def run_image(path, show_window=True):
 
 
     texts = []
+    ocr_confs = []
     for d in dets:
-        raw_txt, _ = ocr_it(d["crop"])
+        raw_txt, ocr_info = ocr_it(d["crop"])
         texts.append(filter_text(raw_txt))
+        ocr_confs.append((ocr_info or {}).get("best_conf", 0.0))
 
     save_path, csv_path = save_results(
         img, dets, texts,
@@ -45,13 +47,19 @@ def run_image(path, show_window=True):
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
-
-    for p in texts:
+    for p, yc, oc in zip(texts, [d["conf"] for d in dets], ocr_confs):
         if p:
             info = lookup_owner(p)
-            print(f"[IMAGE] {p} -> {info['owner_name'] if info else 'Unknown'}")
+            owner = info['owner_name'] if info else 'Unknown'
+            print(f"[IMAGE] {p}  det={yc:.0%}  ocr={oc:.0%}  owner={owner}")
 
-    return {"plates": texts, "csv": csv_path, "annotated_image": save_path}
+    return {
+        "plates": texts,
+        "yolo_confs": [d["conf"] for d in dets],
+        "ocr_confs": ocr_confs,
+        "csv": csv_path,
+        "annotated_image": save_path,
+    }
 
 def _set_cam_props(cap, width=640, height=360, fps=30):
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  width)
@@ -169,11 +177,11 @@ def run_webcam(
                                     info = lookup_owner(plate)
                                 except Exception:
                                     info = None
-                            lbl = f"{plate} | {info['owner_name']}" if (info and info.get("owner_name")) \
-                                  else f"{plate} | Owner: Not Defined"
+                            owner_str = info['owner_name'] if (info and info.get("owner_name")) else "Unknown"
+                            lbl = f"{plate}  {d['conf']:.0%} | {owner_str}"
                         else:
-                            lbl = d.get("cls_name", "plate")
-                        cv2.putText(frame, lbl, (x1, max(0, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, draw_t)
+                            lbl = f"{d.get('cls_name', 'plate')}  {d['conf']:.0%}"
+                        cv2.putText(frame, lbl, (x1, max(0, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.60, color, draw_t)
                 # FPS
                 inst_fps = 1.0 / max(1e-6, time.perf_counter() - tic)
                 fps_ema = inst_fps if fps_ema is None else (alpha * inst_fps + (1 - alpha) * fps_ema)
@@ -330,11 +338,11 @@ def run_video(
                                     info = lookup_owner(plate)
                                 except Exception:
                                     info = None
-                            lbl = f"{plate} | {info['owner_name']}" if (info and info.get("owner_name")) \
-                                  else f"{plate} | Owner: Not Defined"
+                            owner_str = info['owner_name'] if (info and info.get("owner_name")) else "Unknown"
+                            lbl = f"{plate}  {d['conf']:.0%} | {owner_str}"
                         else:
-                            lbl = d.get("cls_name", "plate")
-                        cv2.putText(frame, lbl, (x1, max(0, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, draw_t)
+                            lbl = f"{d.get('cls_name', 'plate')}  {d['conf']:.0%}"
+                        cv2.putText(frame, lbl, (x1, max(0, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.60, color, draw_t)
                 # FPS
                 inst_fps = 1.0 / max(1e-6, time.perf_counter() - tic)
                 fps_ema = inst_fps if fps_ema is None else (alpha * inst_fps + (1 - alpha) * fps_ema)

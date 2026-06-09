@@ -346,8 +346,10 @@ def save_results(image_bgr, detections, ocr_texts, save_dir=SAVE_DIR, file_stem=
         owner = lookup_owner(plate) if plate else None
         owner_name = owner["owner_name"] if owner else ""
         known = bool(owner and owner_name)
-        label = (f"{plate} | {owner_name}" if (plate and known)
-                 else (f"{plate} | Owner : Unknown" if plate else f"{det['cls_name']} {conf:.2f}"))
+        conf_tag = f" [{conf:.0%}]"
+        label = (f"{plate}{conf_tag} | {owner_name}" if (plate and known)
+                 else (f"{plate}{conf_tag} | Owner : Unknown" if plate
+                       else f"{det['cls_name']} {conf:.0%}"))
         cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.putText(out, label, (x1, max(0, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
         rows.append({
