@@ -315,11 +315,16 @@ class App(tk.Tk):
     @staticmethod
     def _detect_cameras(max_test: int = 5) -> list:
         found = []
-        for i in range(max_test):
-            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
-            if cap.isOpened():
-                found.append(str(i))
-                cap.release()
+        old_level = cv2.getLogLevel()
+        cv2.setLogLevel(cv2.LOG_LEVEL_ERROR)  # suppress WARN during probe
+        try:
+            for i in range(max_test):
+                cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+                if cap.isOpened():
+                    found.append(str(i))
+                    cap.release()
+        finally:
+            cv2.setLogLevel(old_level)
         return found or ["0"]
 
     # ── Button handlers ───────────────────────────────────────────────────────

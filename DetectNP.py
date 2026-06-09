@@ -1,21 +1,23 @@
 import os
+import re
 import time
+import unicodedata
 import cv2
 import numpy as np
 import pandas as pd
-
-from pathlib import Path  # <-- thêm
+from pathlib import Path
 from ANPR_Yolo.env import *
 from ANPR_Yolo.Load import _load_model, _load_ocr
 
-# Đặt SAVE_DIR ở CWD để .exe lưu cạnh nơi chạy, không rơi vào _MEIPASS
-SAVE_DIR = Path(os.getcwd()) / "runs" / "anpr_yolo"
-SAVE_DIR.mkdir(parents=True, exist_ok=True)
-
-# REGISTRY_CSV phải tính SAU khi SAVE_DIR đã là Path
-REGISTRY_CSV = str(SAVE_DIR / "vehicle_registry.csv")
+Path(SAVE_DIR).mkdir(parents=True, exist_ok=True)
 
 _PRINTED_MODEL_INFO = False
+
+# Compiled plate-format patterns (reused on every frame in video mode)
+_RE_PLATE_FULL  = re.compile(r"^([0-9]{2})([A-Z])-?([0-9]{3})\.?([0-9]{2})$")
+_RE_PLATE_COMP  = re.compile(r"^([0-9]{2})([A-Z])([0-9]{5})$")
+_RE_PLATE_CLEAN = re.compile(r"[^A-Z0-9\-\.]")
+_RE_NON_ALNUM   = re.compile(r"[^A-Z0-9]")
 
 def _valid_plate_bbox(x1, y1, x2, y2):
     w = max(0, x2 - x1)
@@ -99,14 +101,12 @@ def filter_text(text):
     if not text:
         return ""
 
-    # 1) Làm sạch cơ bản
     t = text.upper().strip()
     t = t.replace("—", "-").replace("–", "-").replace("_", "-").replace(" ", "")
-    t = re.sub(r"[^A-Z0-9\-\.]", "", t)
+    t = _RE_PLATE_CLEAN.sub("", t)
 
-    # 2) Thử regex chuẩn ngay
-    pat_full  = re.compile(r"^([0-9]{2})([A-Z])-?([0-9]{3})\.?([0-9]{2})$")
-    pat_comp  = re.compile(r"^([0-9]{2})([A-Z])([0-9]{5})$")
+    pat_full = _RE_PLATE_FULL
+    pat_comp = _RE_PLATE_COMP
     m = pat_full.match(t)
     if m:  # định dạng đủ, chỉ cần chuẩn hoá dấu
         return f"{m.group(1)}{m.group(2)}-{m.group(3)}.{m.group(4)}"
@@ -130,7 +130,7 @@ def filter_text(text):
                     return f"{m.group(1)}{m.group(2)}-{s[:3]}.{s[3:]}"
 
 
-    compact = re.sub(r"[^A-Z0-9]", "", t)
+    compact = _RE_NON_ALNUM.sub("", t)
     return compact if len(compact) >= 5 else ""
 
 def load_registry(path: str = REGISTRY_CSV) -> pd.DataFrame:
@@ -243,8 +243,6 @@ def ocr_it(crop_bgr, joiner='-'):
     best = max(items, key=lambda z: z[3])[2]
     return filter_text(best), {"all": [{"text": t[2], "conf": t[3]} for t in items], "best_conf": max(t[3] for t in items)}
 
-
-import re, unicodedata
 
 def norm_punct(s: str) -> str:
     if s is None: return ""
@@ -395,16 +393,16 @@ def canonicalize_plate(s: str) -> str:
         t = t[:2] + fix_map.get(t[2], t[2]) + t[3:]
 
 
-    m = re.match(r"^([0-9]{2})([A-Z])-?([0-9]{3})\.?([0-9]{2})$", t)
+    m = _RE_PLATE_FULL.match(t)
     if m:
         return f"{m.group(1)}{m.group(2)}-{m.group(3)}.{m.group(4)}"
 
-    m = re.match(r"^([0-9]{2})([A-Z])([0-9]{5})$", t)
+    m = _RE_PLATE_COMP.match(t)
     if m:
         last5 = m.group(3)
         return f"{m.group(1)}{m.group(2)}-{last5[:3]}.{last5[3:]}"
 
-    compact = re.sub(r"[^A-Z0-9]", "", t)
+    compact = _RE_NON_ALNUM.sub("", t)
     return compact if len(compact) >= 5 else ""
 
 def debug_owner_lookup(plate_raw, path: str = REGISTRY_CSV, topn=5):
@@ -423,10 +421,10 @@ def debug_owner_lookup(plate_raw, path: str = REGISTRY_CSV, topn=5):
     prefix = key[:3]
     cand = df[df["plate_norm"].str.startswith(prefix, na=False)].copy()
     print(f"No exact match. Candidates with prefix '{prefix}':", len(cand))
-    display(cand[["plate","plate_norm","owner_name"]].head(topn))
+    print(cand[["plate", "plate_norm", "owner_name"]].head(topn).to_string(index=False))
 
 def repair_registry(path: str = REGISTRY_CSV):
     df = load_registry(path)       # đã canonicalize lại bên trong
     save_registry(df, path)        # ghi lại utf-8-sig
     print("Rewrote CSV with fresh plate_norm:", path)
-    display(df.head(5))
+    print(df.head(5).to_string(index=False))
