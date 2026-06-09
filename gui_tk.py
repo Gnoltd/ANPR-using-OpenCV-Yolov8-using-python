@@ -244,6 +244,10 @@ class App(tk.Tk):
         scr.config(command=self._hist_box.yview)
         scr.pack(side="right", fill="y")
         self._hist_box.pack(fill="both", expand=True)
+        self._hist_box.bind("<Double-Button-1>", self._on_hist_dbl_click)
+
+        tk.Label(sb, text="Double-click to register owner",
+                 font=("Segoe UI", 8), fg=BORDER, bg=PANEL).pack(anchor="w", padx=10)
 
         self._mk_btn(sb, "Clear History", self._clear_history,
                      BORDER, fg=SUBTEXT).pack(fill="x", padx=10, pady=(4, 10))
@@ -652,6 +656,161 @@ class App(tk.Tk):
 
     def _status(self, msg: str):
         self._status_var.set(msg)
+
+    # ── Registry dialog ───────────────────────────────────────────────────────
+    def _on_hist_dbl_click(self, _event):
+        sel = self._hist_box.curselection()
+        if not sel:
+            return
+        parts = self._hist_box.get(sel[0]).strip().split()
+        if len(parts) < 2:
+            return
+        self._open_registry_dialog(parts[1])
+
+    def _open_registry_dialog(self, plate: str):
+        import shutil as _shutil
+        import pandas as pd
+        try:
+            from ANPR_Yolo.DetectNP import (load_registry, save_registry,
+                                             canonicalize_plate)
+        except Exception as exc:
+            messagebox.showerror("Error", str(exc))
+            return
+
+        try:
+            df = load_registry()
+            key = canonicalize_plate(plate)
+            hit = df[df["plate_norm"] == key]
+            pre = hit.iloc[0].to_dict() if not hit.empty else {}
+        except Exception:
+            df = pd.DataFrame(columns=["plate", "owner_name", "phone", "notes",
+                                        "photo", "plate_norm"])
+            pre = {}
+
+        # ── Dialog window ────────────────────────────────────────────────────
+        dlg = tk.Toplevel(self)
+        dlg.title(f"Register Owner — {plate}")
+        dlg.configure(bg=PANEL)
+        dlg.resizable(False, False)
+        dlg.grab_set()
+        dlg.geometry("440x300")
+
+        fr = tk.Frame(dlg, bg=PANEL, padx=20, pady=14)
+        fr.pack(fill="both", expand=True)
+
+        tk.Label(fr, text=plate, font=F_MONO, fg=ACCENT,
+                 bg=PANEL).grid(row=0, column=0, columnspan=2,
+                                sticky="w", pady=(0, 10))
+
+        field_specs = [
+            ("Owner Name", "owner_name"),
+            ("Phone",      "phone"),
+            ("Notes",      "notes"),
+        ]
+        entry_vars = {}
+        for i, (lbl, key_) in enumerate(field_specs, start=1):
+            tk.Label(fr, text=lbl, font=F_SMALL, fg=SUBTEXT, bg=PANEL,
+                     anchor="e", width=11).grid(row=i, column=0,
+                                                sticky="e", pady=5, padx=(0, 8))
+            var = tk.StringVar(value=str(pre.get(key_, "") or ""))
+            tk.Entry(fr, textvariable=var, font=F_BODY,
+                     bg=CARD, fg=TEXT, insertbackground=TEXT,
+                     relief="flat", bd=4, width=30).grid(row=i, column=1,
+                                                          sticky="ew", pady=5)
+            entry_vars[key_] = var
+
+        # Photo row
+        photo_row = len(field_specs) + 1
+        tk.Label(fr, text="Photo", font=F_SMALL, fg=SUBTEXT, bg=PANEL,
+                 anchor="e", width=11).grid(row=photo_row, column=0,
+                                             sticky="e", pady=5, padx=(0, 8))
+
+        photo_fr = tk.Frame(fr, bg=PANEL)
+        photo_fr.grid(row=photo_row, column=1, sticky="ew", pady=5)
+
+        _initial_photo = str(pre.get("photo", "") or "")
+        photo_display = tk.StringVar(
+            value=os.path.basename(_initial_photo) if _initial_photo else "No photo selected")
+        tk.Label(photo_fr, textvariable=photo_display, font=F_SMALL,
+                 fg=SUBTEXT, bg=PANEL, anchor="w").pack(side="left",
+                                                         fill="x", expand=True)
+
+        _chosen = {"full": _initial_photo}
+
+        def browse_photo():
+            p = filedialog.askopenfilename(
+                parent=dlg, title="Select owner photo",
+                filetypes=[("Image", "*.jpg *.jpeg *.png *.bmp"), ("All", "*.*")])
+            if p:
+                _chosen["full"] = p
+                photo_display.set(os.path.basename(p))
+
+        tk.Button(photo_fr, text="Browse…", command=browse_photo,
+                  bg=CARD, fg=TEXT, font=F_SMALL, relief="flat",
+                  padx=6, pady=3, cursor="hand2").pack(side="right")
+
+        fr.columnconfigure(1, weight=1)
+
+        # ── Action buttons ───────────────────────────────────────────────────
+        btn_fr = tk.Frame(dlg, bg=PANEL, padx=20, pady=(0, 14))
+        btn_fr.pack(fill="x")
+
+        def on_save():
+            try:
+                df2 = load_registry()
+            except Exception:
+                df2 = pd.DataFrame(columns=["plate", "owner_name", "phone",
+                                             "notes", "photo", "plate_norm"])
+
+            if "photo" not in df2.columns:
+                df2["photo"] = ""
+
+            # Copy photo to owners dir if a new file was chosen
+            dest_photo = _initial_photo
+            src = _chosen["full"]
+            if src and os.path.isfile(src) and src != _initial_photo:
+                owners_dir = os.path.join("runs", "anpr_yolo", "owners")
+                os.makedirs(owners_dir, exist_ok=True)
+                canon = canonicalize_plate(plate).replace("-", "_").replace(".", "_")
+                ext = os.path.splitext(src)[1] or ".jpg"
+                dest = os.path.join(owners_dir, f"{canon}{ext}")
+                _shutil.copy2(src, dest)
+                dest_photo = dest
+
+            new_row = {
+                "plate":      plate,
+                "owner_name": entry_vars["owner_name"].get().strip(),
+                "phone":      entry_vars["phone"].get().strip(),
+                "notes":      entry_vars["notes"].get().strip(),
+                "photo":      dest_photo,
+            }
+
+            key2 = canonicalize_plate(plate)
+            mask = df2["plate_norm"] == key2 if "plate_norm" in df2.columns \
+                else pd.Series([False] * len(df2))
+
+            if mask.any():
+                for col, val in new_row.items():
+                    if col in df2.columns:
+                        df2.loc[mask, col] = val
+            else:
+                df2 = pd.concat([df2, pd.DataFrame([new_row])],
+                                 ignore_index=True)
+
+            save_registry(df2)
+            dlg.destroy()
+            messagebox.showinfo("Saved",
+                                f"Owner registered for {plate}:\n"
+                                f"{new_row['owner_name'] or '(no name)'}")
+
+        tk.Button(btn_fr, text="Cancel", command=dlg.destroy,
+                  bg=BORDER, fg=TEXT, font=F_BODY,
+                  relief="flat", padx=10, pady=6,
+                  cursor="hand2").pack(side="right", padx=(6, 0))
+        tk.Button(btn_fr, text="Save", command=on_save,
+                  bg=ACCENT, fg=BG, font=("Segoe UI", 10, "bold"),
+                  relief="flat", padx=10, pady=6,
+                  cursor="hand2").pack(side="right")
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
