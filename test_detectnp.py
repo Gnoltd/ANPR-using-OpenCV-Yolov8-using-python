@@ -43,6 +43,15 @@ class FilterTextMotorbikeFormatTests(unittest.TestCase):
     def test_real_eval_sample_v7(self):
         self.assertEqual(filter_text("29V7-376.94"), "29V7-376.94")
 
+    def test_ambiguous_compact_prefers_car_format_over_moto(self):
+        # "29B12345" is genuinely ambiguous: it matches both car-compact
+        # (letter "B" + 5-digit body "12345") and moto-compact (series "B1"
+        # + 4-digit body "2345"). Car format wins by pattern order in
+        # _PLATE_PATTERNS (see DetectNP.py) since it's the more common
+        # format — this is an accepted false-negative for real moto plates
+        # in this exact shape (2-char series + exactly 4 digits, no dash).
+        self.assertEqual(filter_text("29B12345"), "29B-123.45")
+
 
 class CanonicalizePlateMotorbikeFormatTests(unittest.TestCase):
     def test_dotted_motorbike_plate(self):
