@@ -262,17 +262,23 @@ def lookup_owner(plate: str, path: str = REGISTRY_CSV):
             "notes": r.get("notes","")
         }
     return None
+def _scale_to_target_height(crop_bgr, target_h=120):
+    h, w = crop_bgr.shape[:2]
+    if h == target_h:
+        return crop_bgr
+    scale = target_h / float(h)
+    new_w = max(1, int(round(w * scale)))
+    interp = cv2.INTER_CUBIC if h < target_h else cv2.INTER_LINEAR
+    return cv2.resize(crop_bgr, (new_w, target_h), interpolation=interp)
+
+
 def ocr_it(crop_bgr, joiner='-'):
     reader = _load_ocr()
     if crop_bgr is None or crop_bgr.size == 0:
         return "", {"all": [], "best_conf": 0.0}
 
-    # scale crop cho chiều cao ~120px để tăng độ nét
-    h, w = crop_bgr.shape[:2]
-    target_h = 120
-    if h > target_h:
-        scale = target_h / float(h)
-        crop_bgr = cv2.resize(crop_bgr, (int(w * scale), target_h), interpolation=cv2.INTER_LINEAR)
+    # scale crop cho chiều cao ~120px để tăng độ nét (scale both up and down)
+    crop_bgr = _scale_to_target_height(crop_bgr, target_h=120)
 
     rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
 

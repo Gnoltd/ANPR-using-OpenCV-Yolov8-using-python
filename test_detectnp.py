@@ -21,11 +21,15 @@ _register_anpr_yolo_package()
 import unittest
 import csv
 import tempfile
+from unittest.mock import patch
+import numpy as np
+import cv2
 import pandas as pd
 
 from DetectNP import (
     filter_text, canonicalize_plate, select_plate_text,
     correct_against_registry, lookup_owner, _valid_plate_bbox,
+    _scale_to_target_height,
 )
 
 
@@ -86,6 +90,39 @@ class ValidPlateBboxTests(unittest.TestCase):
 
     def test_too_wide_aspect_ratio_is_invalid(self):
         self.assertFalse(_valid_plate_bbox(0, 0, 500, 20))
+
+
+class ScaleToTargetHeightTests(unittest.TestCase):
+    def test_small_crop_is_upscaled_to_target_height(self):
+        crop = np.zeros((28, 54, 3), dtype=np.uint8)
+        out = _scale_to_target_height(crop, target_h=120)
+        self.assertEqual(out.shape[0], 120)
+        self.assertEqual(out.shape[1], round(54 * 120 / 28))
+
+    def test_small_crop_upscale_uses_cubic_interpolation(self):
+        crop = np.zeros((28, 54, 3), dtype=np.uint8)
+        with patch("DetectNP.cv2.resize", wraps=cv2.resize) as spy:
+            _scale_to_target_height(crop, target_h=120)
+            _, kwargs = spy.call_args
+            self.assertEqual(kwargs.get("interpolation"), cv2.INTER_CUBIC)
+
+    def test_large_crop_is_downscaled_to_target_height(self):
+        crop = np.zeros((200, 400, 3), dtype=np.uint8)
+        out = _scale_to_target_height(crop, target_h=120)
+        self.assertEqual(out.shape[0], 120)
+        self.assertEqual(out.shape[1], round(400 * 120 / 200))
+
+    def test_large_crop_downscale_uses_linear_interpolation(self):
+        crop = np.zeros((200, 400, 3), dtype=np.uint8)
+        with patch("DetectNP.cv2.resize", wraps=cv2.resize) as spy:
+            _scale_to_target_height(crop, target_h=120)
+            _, kwargs = spy.call_args
+            self.assertEqual(kwargs.get("interpolation"), cv2.INTER_LINEAR)
+
+    def test_crop_already_at_target_height_is_unchanged(self):
+        crop = np.zeros((120, 300, 3), dtype=np.uint8)
+        out = _scale_to_target_height(crop, target_h=120)
+        self.assertIs(out, crop)
 
 
 class FilterTextStrictModeTests(unittest.TestCase):
