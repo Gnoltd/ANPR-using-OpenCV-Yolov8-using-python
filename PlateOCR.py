@@ -1,0 +1,94 @@
+import cv2
+import numpy as np
+
+CHAR_ALPHABET = "0123456789ABCDEFGHKLMNPSTUVXYZ"
+
+_CAR_ROW1_COUNT = 8
+_MOTO_ROW1_COUNT = 4
+_MOTO_ROW2_COUNTS = (4, 5)
+
+# Connected-component filter thresholds (fractions of crop area/height/width).
+# Tuned empirically against both synthetic rendered plates and 4 real VN
+# plate crops (car x3, moto x1) from eval_images_vn/ - see Task 1 Step 6
+# in docs/superpowers/plans/2026-07-18-character-classifier-ocr.md for the
+# measured pass/fail results that produced these values.
+_MIN_AREA_FRAC = 0.003
+_MAX_AREA_FRAC = 0.35
+_MIN_H_FRAC = 0.12
+_MAX_H_FRAC = 0.98
+_MAX_W_FRAC = 0.6
+_ROW_GAP_FRAC = 0.15
+
+
+def _binarize(gray):
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    return binary
+
+
+def _character_components(gray):
+    """Connected components on the binarized crop, filtered to plausible
+    single-character shapes. Rejects components touching >=3 of the crop's
+    4 edges (border-frame remnants) rather than relying on a fixed border
+    trim, since real plate borders vary in thickness relative to crop size."""
+    h, w = gray.shape[:2]
+    binary = _binarize(gray)
+    n, _labels, stats, _centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    crop_area = h * w
+
+    comps = []
+    for i in range(1, n):  # label 0 is background
+        x, y, cw, ch, area = stats[i]
+        if area < _MIN_AREA_FRAC * crop_area or area > _MAX_AREA_FRAC * crop_area:
+            continue
+        if ch < _MIN_H_FRAC * h or ch > _MAX_H_FRAC * h:
+            continue
+        if cw > _MAX_W_FRAC * w:
+            continue
+        touches = sum([x <= 1, y <= 1, (x + cw) >= w - 1, (y + ch) >= h - 1])
+        if touches >= 3:
+            continue
+        comps.append((x, y, cw, ch, y + ch / 2.0))
+    return comps
+
+
+def _group_into_rows(comps, row_gap, crop_gray):
+    comps = sorted(comps, key=lambda c: c[4])  # sort by vertical center
+    rows = []
+    for c in comps:
+        if not rows or (c[4] - rows[-1][-1][4]) > row_gap:
+            rows.append([c])
+        else:
+            rows[-1].append(c)
+
+    result = []
+    for row in rows:
+        row_sorted = sorted(row, key=lambda c: c[0])  # left-to-right
+        chars = [crop_gray[y:y + ch, x:x + cw] for (x, y, cw, ch, _cy) in row_sorted]
+        result.append(chars)
+    return result
+
+
+def segment_plate_characters(crop_bgr):
+    if crop_bgr is None or crop_bgr.size == 0:
+        return []
+
+    gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+    h = gray.shape[0]
+
+    comps = _character_components(gray)
+    if not comps:
+        return []
+
+    rows = _group_into_rows(comps, row_gap=_ROW_GAP_FRAC * h, crop_gray=gray)
+
+    counts = [len(r) for r in rows]
+    if len(rows) == 1:
+        if counts[0] != _CAR_ROW1_COUNT:
+            return []
+    elif len(rows) == 2:
+        if counts[0] != _MOTO_ROW1_COUNT or counts[1] not in _MOTO_ROW2_COUNTS:
+            return []
+    else:
+        return []
+
+    return rows

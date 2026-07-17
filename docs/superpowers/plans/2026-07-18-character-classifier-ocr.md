@@ -138,7 +138,7 @@ Expected: `ModuleNotFoundError: No module named 'PlateOCR'`.
 
 - [ ] **Step 3: Implement `segment_plate_characters`**
 
-Create `PlateOCR.py`:
+Create `PlateOCR.py`. **Note:** the row/column ink-projection-profile approach originally sketched in this plan's design was tried first and found unreliable on real crops during implementation (a plate's border frame contributes ink unevenly relative to crop size, breaking the row/column split in ways no threshold tuning fixed across 12 tested combinations — see Task 1 Step 6 below for the full account). It was replaced with connected-component filtering, which passed both the synthetic tests and all 4 real single-plate crops used for tuning:
 
 ```python
 import cv2
@@ -150,13 +150,15 @@ _CAR_ROW1_COUNT = 8
 _MOTO_ROW1_COUNT = 4
 _MOTO_ROW2_COUNTS = (4, 5)
 
-
-def _trim_border(gray, frac):
-    h, w = gray.shape[:2]
-    my, mx = int(h * frac), int(w * frac)
-    if h - 2 * my < 4 or w - 2 * mx < 4:
-        return gray
-    return gray[my:h - my, mx:w - mx]
+# Connected-component filter thresholds (fractions of crop area/height/width).
+# Tuned empirically against both synthetic rendered plates and 4 real VN
+# plate crops (car x3, moto x1) from eval_images_vn/ - see Step 6 below.
+_MIN_AREA_FRAC = 0.003
+_MAX_AREA_FRAC = 0.35
+_MIN_H_FRAC = 0.12
+_MAX_H_FRAC = 0.98
+_MAX_W_FRAC = 0.6
+_ROW_GAP_FRAC = 0.15
 
 
 def _binarize(gray):
@@ -164,67 +166,76 @@ def _binarize(gray):
     return binary
 
 
-def _split_bands(mask_1d, min_gap, min_size):
-    n = len(mask_1d)
-    bands = []
-    in_band = False
-    start = 0
-    for i in range(n):
-        if mask_1d[i] and not in_band:
-            in_band = True
-            start = i
-        elif not mask_1d[i] and in_band:
-            in_band = False
-            bands.append([start, i])
-    if in_band:
-        bands.append([start, n])
-    merged = []
-    for b in bands:
-        if merged and b[0] - merged[-1][1] < min_gap:
-            merged[-1][1] = b[1]
+def _character_components(gray):
+    """Connected components on the binarized crop, filtered to plausible
+    single-character shapes. Rejects components touching >=3 of the crop's
+    4 edges (border-frame remnants) rather than relying on a fixed border
+    trim, since real plate borders vary in thickness relative to crop size."""
+    h, w = gray.shape[:2]
+    binary = _binarize(gray)
+    n, _labels, stats, _centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    crop_area = h * w
+
+    comps = []
+    for i in range(1, n):  # label 0 is background
+        x, y, cw, ch, area = stats[i]
+        if area < _MIN_AREA_FRAC * crop_area or area > _MAX_AREA_FRAC * crop_area:
+            continue
+        if ch < _MIN_H_FRAC * h or ch > _MAX_H_FRAC * h:
+            continue
+        if cw > _MAX_W_FRAC * w:
+            continue
+        touches = sum([x <= 1, y <= 1, (x + cw) >= w - 1, (y + ch) >= h - 1])
+        if touches >= 3:
+            continue
+        comps.append((x, y, cw, ch, y + ch / 2.0))
+    return comps
+
+
+def _group_into_rows(comps, row_gap, crop_gray):
+    comps = sorted(comps, key=lambda c: c[4])  # sort by vertical center
+    rows = []
+    for c in comps:
+        if not rows or (c[4] - rows[-1][-1][4]) > row_gap:
+            rows.append([c])
         else:
-            merged.append(b)
-    return [b for b in merged if (b[1] - b[0]) >= min_size]
+            rows[-1].append(c)
+
+    result = []
+    for row in rows:
+        row_sorted = sorted(row, key=lambda c: c[0])  # left-to-right
+        chars = [crop_gray[y:y + ch, x:x + cw] for (x, y, cw, ch, _cy) in row_sorted]
+        result.append(chars)
+    return result
 
 
-def segment_plate_characters(crop_bgr, border_trim_frac=0.06, ink_thresh_frac=0.25):
+def segment_plate_characters(crop_bgr):
     if crop_bgr is None or crop_bgr.size == 0:
         return []
 
-    gray_full = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-    gray = _trim_border(gray_full, border_trim_frac)
-    if gray.size == 0:
+    gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+    h = gray.shape[0]
+
+    comps = _character_components(gray)
+    if not comps:
         return []
 
-    binary = _binarize(gray)
-    h, w = binary.shape[:2]
-
-    row_ink_frac = (binary > 0).mean(axis=1)
-    row_mask = row_ink_frac > ink_thresh_frac
-    row_bands = _split_bands(row_mask, min_gap=max(3, int(0.05 * h)), min_size=max(4, int(0.15 * h)))
-    if len(row_bands) not in (1, 2):
-        return []
-
-    rows = []
-    for (y0, y1) in row_bands:
-        row_binary = binary[y0:y1, :]
-        col_ink_frac = (row_binary > 0).mean(axis=0)
-        col_mask = col_ink_frac > ink_thresh_frac
-        char_bands = _split_bands(col_mask, min_gap=max(2, int(0.03 * w)), min_size=max(2, int(0.015 * w)))
-        row_gray = gray[y0:y1, :]
-        chars = [row_gray[:, x0:x1] for (x0, x1) in char_bands]
-        rows.append(chars)
+    rows = _group_into_rows(comps, row_gap=_ROW_GAP_FRAC * h, crop_gray=gray)
 
     counts = [len(r) for r in rows]
     if len(rows) == 1:
         if counts[0] != _CAR_ROW1_COUNT:
             return []
-    else:
+    elif len(rows) == 2:
         if counts[0] != _MOTO_ROW1_COUNT or counts[1] not in _MOTO_ROW2_COUNTS:
             return []
+    else:
+        return []
 
     return rows
 ```
+
+Note this function's signature dropped the `border_trim_frac`/`ink_thresh_frac` parameters from the original design (`segment_plate_characters(crop_bgr, border_trim_frac=0.06, ink_thresh_frac=0.25)`) since the new algorithm doesn't use fixed trim/threshold fractions at all — border rejection is now per-component (edge-touching test), not a fixed crop-level trim. Callers only ever pass `crop_bgr`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -238,23 +249,39 @@ Expected: all 6 tests pass.
 git add PlateOCR.py test_plateocr.py
 git commit -m "Add character segmentation for plate OCR
 
-Classical CV: trims the plate's border frame (which otherwise merges
-with character ink and collapses row/column detection), binarizes via
-Otsu, then splits into rows and characters via ink-fraction projection
-profiles. Validates row/character counts against known VN plate
+Classical CV: binarizes via Otsu, finds connected components, filters
+to plausible single-character blobs (rejecting anything touching >=3
+of the crop's edges as a border-frame remnant), then groups surviving
+components into 1-2 rows by vertical position and sorts each row
+left-to-right. Validates row/character counts against known VN plate
 layouts before returning a result; returns [] on anything implausible
-so callers can fall back to the existing EasyOCR path."
+so callers can fall back to the existing EasyOCR path. An initial
+row/column ink-projection-profile approach was tried and abandoned
+after failing on real crops - see Step 6 for the full account."
 ```
 
 - [ ] **Step 6: Tune thresholds against real crops (required before this task is done)**
 
-The `border_trim_frac=0.06, ink_thresh_frac=0.25` defaults above were verified during scoping against exactly one real crop (`eval_images_vn/vn-demo1.jpg`, a clean car-format plate) and are starting points, not proven values. Before marking this task complete:
+**This step was already completed during plan execution, not left for later — recorded here for the audit trail.**
 
-1. Register the `ANPR_Yolo` package (same bootstrap as `test_plateocr.py`), call `detect_fn` from `DetectNP.py` on each of these single-plate images and get their crop(s): `eval_images_vn/vn-demo1.jpg` (car, GT `18A-123.45`), `eval_images_vn/vn-3.jpg` (car, GT `30A-339.18`), `eval_images_vn/vn-121.jpg` (car, GT `51G-971.62`), `eval_images_vn/vn-101.jpg` (moto, GT `29B1-256.62` — note this image may produce 2 detections; use the one whose crop is plate-shaped, not the spurious low-confidence one).
-2. Run `segment_plate_characters` on each crop. Car crops should yield 1 row of 8 characters; the moto crop should yield 2 rows of 4 and 5.
-3. If any crop returns `[]` or the wrong counts, adjust `border_trim_frac`/`ink_thresh_frac` (and update the function's defaults) until **at least 3 of the 4** crops segment correctly. Document the final values and per-image pass/fail in your task report — this is a real, measured result, not an assumption.
-4. This is not a new automated unit test (real photos are too variable for a hard pass/fail assertion in CI) — it's a documented manual verification step, same spirit as the threshold-tuning experiment already in this project's history (`docs/superpowers/notes/2026-07-17-threshold-experiment-results.md`).
-5. If defaults changed, re-commit: `git add PlateOCR.py && git commit -m "Tune segmentation thresholds against real VN plate crops"`.
+The row/column ink-projection-profile version originally in this plan (fixed `border_trim_frac`/`ink_thresh_frac`) was tested against `eval_images_vn/vn-demo1.jpg` (car, GT `18A-123.45`), `eval_images_vn/vn-3.jpg` (car, GT `30A-339.18`), `eval_images_vn/vn-121.jpg` (car, GT `51G-971.62`), and `eval_images_vn/vn-101.jpg` (moto, GT `29B1-256.62`; the higher-confidence of its 2 detections is the real plate, the other is a spurious low-confidence box). A grid search over 12 `(border_trim_frac, ink_thresh_frac)` combinations topped out at **2 of 4** real crops correct — short of the 3/4 bar — because:
+
+- `vn-3.jpg`'s printed border is proportionally thick relative to its short crop height (39px); no fixed trim percentage removed it without also cutting into characters.
+- `vn-101.jpg` (the moto case) never showed a clean row-gap in its ink profile at all — its border contributes a smooth ink gradient across the full crop height rather than two distinct bands.
+
+An adaptive solid-border-stripping variant was also tried and made results worse, not better. Rather than continuing to tune a fundamentally row/column-projection-based approach, it was replaced with the connected-component algorithm now in Step 3, which classifies each character as its own filtered blob (rejecting blobs that touch ≥3 of the crop's edges as border remnants) instead of relying on any global row/column ink threshold. Retested against the same 4 real crops plus all 3 synthetic cases:
+
+| Image | Expected | Result |
+|---|---|---|
+| `vn-demo1.jpg` (car) | 1 row, 8 chars | ✅ `[8]` |
+| `vn-3.jpg` (car) | 1 row, 8 chars | ✅ `[8]` |
+| `vn-121.jpg` (car) | 1 row, 8 chars | ✅ `[8]` |
+| `vn-101.jpg` (moto) | 2 rows, 4+5 chars | ✅ `[4, 5]` |
+| synthetic car/moto-dotted/moto-compact | — | ✅ all 3 |
+
+**4 of 4 real crops correct**, exceeding the original 3/4 bar. The `_MIN_AREA_FRAC`/`_MAX_AREA_FRAC`/`_MIN_H_FRAC`/`_MAX_H_FRAC`/`_MAX_W_FRAC`/`_ROW_GAP_FRAC` constants in Step 3's code are the values that produced this result — no further tuning needed before proceeding to Task 2.
+
+This remains a documented manual verification result, not a new automated unit test (real photos are too variable for a hard pass/fail assertion in CI) — same spirit as the threshold-tuning experiment already in this project's history (`docs/superpowers/notes/2026-07-17-threshold-experiment-results.md`).
 
 ---
 
