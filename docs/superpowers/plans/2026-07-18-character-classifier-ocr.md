@@ -658,7 +658,7 @@ same convention as best.pt)."
 
 **Interfaces:**
 - Consumes: `segment_plate_characters` (Task 1), `CHAR_ALPHABET` (Task 1), `CharClassifierCNN`/`load_char_classifier` (Task 3), `gt_vn.csv` (existing eval ground truth), `DetectNP.detect_fn` (existing).
-- Produces: `extract_real_char_dataset(gt_rows: list[tuple[str, str]], load_crop_fn: Callable[[str], np.ndarray]) -> tuple[list[np.ndarray], list[int]]` (real segmented character images + their labels, derived by matching segmentation output shape to known GT string length — no manual annotation; `gt_rows` is `(image_filename, plate_gt)` pairs, `load_crop_fn` maps an image filename to its plate crop). `load_gt_rows(gt_csv="gt_vn.csv") -> list[tuple[str, str]]`. `fine_tune_on_real(model, images, labels, epochs=10, out_path="char_classifier.pt")`.
+- Produces: `extract_real_char_dataset(gt_rows: list[tuple[str, str]], load_crops_fn: Callable[[str], list[np.ndarray]]) -> tuple[list[np.ndarray], list[int]]` (real segmented character images + their labels, derived by matching segmentation output shape to known GT string length — no manual annotation; `gt_rows` is `(image_filename, plate_gt)` pairs, `load_crops_fn` maps an image filename to *all* of its detected plate crops, since multi-plate images need each GT row matched to a distinct crop). `load_gt_rows(gt_csv="gt_vn.csv") -> list[tuple[str, str]]`. `fine_tune_on_real(model, images, labels, epochs=10, out_path="char_classifier.pt")`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -678,7 +678,8 @@ class ExtractRealCharDatasetTests(unittest.TestCase):
         fake_rows = [[np.zeros((32, 32), dtype=np.uint8) for _ in range(8)]]
         with patch("train_char_classifier.segment_plate_characters", return_value=fake_rows):
             images, labels = extract_real_char_dataset(
-                [("fake.jpg", "18A-123.45")], lambda path: np.zeros((10, 10, 3), dtype=np.uint8)
+                [("fake.jpg", "18A-123.45")],
+                lambda path: [np.zeros((10, 10, 3), dtype=np.uint8)],
             )
         self.assertEqual(len(images), 8)
         expected = [CHAR_ALPHABET.index(c) for c in "18A12345"]
@@ -688,10 +689,37 @@ class ExtractRealCharDatasetTests(unittest.TestCase):
         fake_rows = [[np.zeros((32, 32), dtype=np.uint8) for _ in range(3)]]  # wrong count
         with patch("train_char_classifier.segment_plate_characters", return_value=fake_rows):
             images, labels = extract_real_char_dataset(
-                [("fake.jpg", "18A-123.45")], lambda path: np.zeros((10, 10, 3), dtype=np.uint8)
+                [("fake.jpg", "18A-123.45")],
+                lambda path: [np.zeros((10, 10, 3), dtype=np.uint8)],
             )
         self.assertEqual(images, [])
         self.assertEqual(labels, [])
+
+    def test_multi_plate_image_matches_each_gt_row_to_a_different_crop(self):
+        # Two GT plates for the same image, both 8 chars: each of the
+        # image's two crops must be paired with a distinct GT row, not
+        # both matched against the same first crop.
+        crop_a = np.full((10, 10, 3), 1, dtype=np.uint8)
+        crop_b = np.full((10, 10, 3), 2, dtype=np.uint8)
+        fake_rows_a = [[np.full((32, 32), 1, dtype=np.uint8) for _ in range(8)]]
+        fake_rows_b = [[np.full((32, 32), 2, dtype=np.uint8) for _ in range(8)]]
+
+        def fake_segment(crop):
+            if np.array_equal(crop, crop_a):
+                return fake_rows_a
+            if np.array_equal(crop, crop_b):
+                return fake_rows_b
+            return []
+
+        with patch("train_char_classifier.segment_plate_characters", side_effect=fake_segment):
+            images, labels = extract_real_char_dataset(
+                [("multi.jpg", "18A-123.45"), ("multi.jpg", "30E-999.99")],
+                lambda path: [crop_a, crop_b],
+            )
+        self.assertEqual(len(images), 16)
+        expected_labels = [CHAR_ALPHABET.index(c) for c in "18A12345"] + \
+                           [CHAR_ALPHABET.index(c) for c in "30E99999"]
+        self.assertEqual(labels, expected_labels)
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -701,6 +729,8 @@ Run: `.venv/Scripts/python.exe -m unittest test_train_char_classifier -v`
 Expected: `ImportError: cannot import name 'extract_real_char_dataset' from 'train_char_classifier'`.
 
 - [ ] **Step 3: Implement `extract_real_char_dataset` and `fine_tune_on_real`**
+
+**Bug found and fixed during implementation, documented here for the audit trail:** this plan originally specified `load_crop_fn(image_filename) -> single crop`, always used via `dets[0]["crop"]`. `gt_vn.csv` has 6 of 10 images with more than one GT plate (16 of 22 plates total are in multi-plate images) — with a single-crop loader, every GT row for a multi-plate image would be paired against the *same* first detection's crop, since nothing varied per-row. The signature was changed to `load_crops_fn(image_filename) -> list[crop]` (all of that image's detections), and `extract_real_char_dataset` now matches each GT row against the image's remaining unconsumed crops (by segmented character count), removing a crop from the pool once matched so two GT rows for the same image can't both claim the same crop. A test (`test_multi_plate_image_matches_each_gt_row_to_a_different_crop`) locks this in.
 
 Append to `train_char_classifier.py`:
 
@@ -719,23 +749,43 @@ def _plate_to_chars(plate_gt):
     return [c for c in plate_gt.upper() if c not in "-. "]
 
 
-def extract_real_char_dataset(gt_rows, load_crop_fn):
-    """gt_rows: list of (image_filename, plate_gt) tuples.
-    load_crop_fn: image_filename -> single plate crop (np.ndarray, BGR).
-    Returns (images, labels) for every plate whose segmentation result's
-    total character count matches len(_plate_to_chars(plate_gt))."""
+def extract_real_char_dataset(gt_rows, load_crops_fn):
+    """gt_rows: list of (image_filename, plate_gt) tuples, possibly several
+    rows per image (multi-plate images).
+    load_crops_fn: image_filename -> list of that image's detected plate
+    crops (np.ndarray, BGR) - ALL detections, not just one, since an image
+    with N ground-truth plates needs its N crops matched individually.
+    Returns (images, labels) for every (crop, plate) pairing where the
+    crop's segmentation result's total character count matches
+    len(_plate_to_chars(plate_gt)). Each crop is consumed by at most one
+    GT row (first match wins) so a multi-plate image's several GT rows
+    don't all get paired against the same crop."""
     images = []
     labels = []
+    crops_by_image = {}
     for image_filename, plate_gt in gt_rows:
-        crop = load_crop_fn(image_filename)
-        rows = segment_plate_characters(crop)
-        if not rows:
-            continue
-        flat_chars = [ch for row in rows for ch in row]
+        if image_filename not in crops_by_image:
+            crops_by_image[image_filename] = list(load_crops_fn(image_filename) or [])
+        remaining_crops = crops_by_image[image_filename]
+
         expected = _plate_to_chars(plate_gt)
-        if len(flat_chars) != len(expected):
+        matched_index = None
+        matched_flat_chars = None
+        for idx, crop in enumerate(remaining_crops):
+            rows = segment_plate_characters(crop)
+            if not rows:
+                continue
+            flat_chars = [ch for row in rows for ch in row]
+            if len(flat_chars) == len(expected):
+                matched_index = idx
+                matched_flat_chars = flat_chars
+                break
+
+        if matched_index is None:
             continue
-        for char_img, expected_char in zip(flat_chars, expected):
+        del remaining_crops[matched_index]
+
+        for char_img, expected_char in zip(matched_flat_chars, expected):
             if expected_char not in CHAR_ALPHABET:
                 continue
             images.append(_cv2.resize(char_img, (32, 32)))
@@ -783,7 +833,7 @@ def fine_tune_on_real(model, images, labels, epochs=10, batch_size=16, out_path=
 
 Run: `.venv/Scripts/python.exe -m unittest test_train_char_classifier -v`
 
-Expected: all 8 tests pass.
+Expected: all 9 tests pass (8 from Tasks 2-3 + 3 new `ExtractRealCharDatasetTests`, since the multi-plate test above was added during implementation).
 
 - [ ] **Step 5: Wire into the script's `__main__` block and run it for real**
 
@@ -793,15 +843,15 @@ Replace the `if __name__ == "__main__":` block at the end of `train_char_classif
 if __name__ == "__main__":
     model = train_on_synthetic()
 
-    def _load_crop(image_filename):
+    def _load_crops(image_filename):
         _register_anpr_yolo_from_here()
         from ANPR_Yolo.DetectNP import detect_fn
         img = _cv2.imread(os.path.join("eval_images_vn", image_filename))
-        dets = detect_fn(img)
-        return dets[0]["crop"] if dets else None
+        dets = sorted(detect_fn(img), key=lambda d: -d["conf"])
+        return [d["crop"] for d in dets]
 
     gt_rows = load_gt_rows("gt_vn.csv")
-    images, labels = extract_real_char_dataset(gt_rows, _load_crop)
+    images, labels = extract_real_char_dataset(gt_rows, _load_crops)
     print(f"Extracted {len(images)} real labeled characters from eval_images_vn/")
     fine_tune_on_real(model, images, labels)
 ```
