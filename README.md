@@ -209,7 +209,8 @@ python anpr_eval.py run --images path\to\images
 
 ### Ground-truth filename convention
 
-Ground truth is derived from the image filename stem (no folder or extension):
+`build-gt` derives one ground-truth row per **image file** from its filename stem
+(no folder or extension):
 
 - `18A-123.45.jpg` → ground-truth plate `18A-123.45`
 - `18A-123.45__front.jpg` → the part before `__` is the plate (`18A-123.45`); use
@@ -217,15 +218,25 @@ Ground truth is derived from the image filename stem (no folder or extension):
 - `noplate__01.jpg` (or `background`/`negative` as the prefix) → ground-truth plate
   is empty, i.e. the image has no plate and any prediction on it is a false positive
 
+This only captures one plate per file. For photos with **multiple plates in frame**,
+hand-author `gt.csv` directly with one row per plate, all sharing the same `image`
+value — `eval` supports any number of ground-truth rows per image.
+
 ### preds.csv / gt.csv schema
+
+Both files may contain multiple rows for the same `image` (one row per plate /
+detected box).
 
 | Column | Meaning |
 |---|---|
 | `image` | filename (matched between preds.csv and gt.csv) |
-| `plate` | plate text (ground truth in gt.csv; best OCR reading in preds.csv) |
-| `detected` | *(preds.csv only)* `1` if YOLO found at least one plate box, else `0` |
-| `det_conf` | *(preds.csv only)* YOLO confidence of the best box (0 if none) |
-| `ocr_conf` | *(preds.csv only)* EasyOCR confidence of the best reading (0 if none) |
+| `plate` | plate text (ground truth in gt.csv; OCR reading in preds.csv) |
+| `detected` | *(preds.csv only)* `1` per row that corresponds to a YOLO box |
+| `det_conf` | *(preds.csv only)* YOLO confidence of that box |
+| `ocr_conf` | *(preds.csv only)* EasyOCR confidence of that reading |
+
+An image with zero plates (negative/background) should appear as a single row with
+an empty `plate` (and `detected=0` in preds.csv if nothing was found).
 
 ### Metrics
 
@@ -233,21 +244,24 @@ Plate strings are compared using `normalize_for_compare`, which upper-cases and 
 only `A-Z0-9` (so `18A-123.45` and `18A12345` are treated as equal) — this scores
 character-recognition correctness independent of punctuation formatting.
 
-For every image with a non-empty ground-truth plate, its prediction is a **match**
-if `normalize_for_compare(pred) == normalize_for_compare(gt)`.
+Within one image, ground-truth plates and predicted plates are matched by exact
+normalized text as a multiset (no bounding-box correspondence, since ground truth
+here carries no box) — e.g. 2 GT plates + 2 predictions with 1 exact match yields
+1 TP, 1 FN (the unmatched GT plate), 1 FP (the unmatched prediction).
 
 | Metric | Formula |
 |---|---|
-| **Detection Rate** | (images with GT plate where YOLO found ≥1 box) / (images with GT plate) |
-| **Recognition Accuracy** | (images with GT plate where the prediction matches) / (images with GT plate) |
-| **Mean CER** | average Character Error Rate — `edit_distance(pred, gt) / len(gt)` — over images with a GT plate (uncapped; can exceed 1.0 if the prediction is much longer than the ground truth) |
+| **Detection Rate** | for each image, `min(#GT plates, #YOLO boxes found)`, summed and divided by total GT plates (a box-count proxy, since GT has no per-plate location to check against) |
+| **Recognition Accuracy** | matched GT plates / total GT plates |
+| **Mean CER** | average Character Error Rate — `edit_distance(pred, gt) / len(gt)` — over every GT plate, using its best-available unmatched prediction (or 1.0 if none left) |
 | **Precision** | TP / (TP + FP) |
 | **Recall** | TP / (TP + FN) — equal to Recognition Accuracy |
 | **F1** | harmonic mean of Precision and Recall |
 
-Where, per image: **TP** = GT plate present and prediction matches; **FN** = GT plate
-present and prediction is missing/wrong; **FP** = GT plate empty (negative image) but
-a non-empty plate was predicted; **TN** = GT plate empty and nothing was predicted.
+Where, per image: **TP** = a predicted plate exactly matches a GT plate; **FN** = a
+GT plate has no matching prediction; **FP** = a predicted plate doesn't match any GT
+plate in that image (whether the image is a negative, or has other GT plates it
+doesn't match); **TN** = a negative image where nothing was predicted.
 
 ---
 

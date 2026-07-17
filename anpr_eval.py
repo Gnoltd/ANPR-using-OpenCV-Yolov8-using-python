@@ -9,6 +9,7 @@ import csv
 import os
 import re
 import sys
+from collections import Counter, defaultdict
 
 _RE_NON_ALNUM = re.compile(r"[^A-Z0-9]")
 _NEGATIVE_KEYWORDS = {"noplate", "background", "negative", "none"}
@@ -74,14 +75,32 @@ def _truthy(v):
 
 
 def evaluate(gt_rows, pred_rows):
-    gt_by_image = {r["image"]: r.get("plate", "") for r in gt_rows}
-    pred_by_image = {
-        r["image"]: {
-            "plate": r.get("plate", ""),
-            "detected": _truthy(r.get("detected", "0")),
-        }
-        for r in pred_rows
-    }
+    """Score predictions against ground truth.
+
+    Both gt_rows and pred_rows may contain multiple rows for the same image
+    (one row per plate / detected box). A GT image with no non-empty plate
+    row is treated as a negative (no-plate) image. Matching within an image
+    is by exact normalized text (multiset match, not position-based) since
+    ground truth here carries no per-plate bounding box to match against.
+    """
+    gt_by_image = defaultdict(list)
+    for r in gt_rows:
+        image = r["image"]
+        gt_by_image.setdefault(image, [])  # register the image even if this row's plate is empty
+        plate = normalize_for_compare(r.get("plate", ""))
+        if plate:
+            gt_by_image[image].append(plate)
+
+    pred_by_image = defaultdict(list)
+    pred_detected_count = defaultdict(int)
+    for r in pred_rows:
+        image = r["image"]
+        pred_by_image.setdefault(image, [])
+        if _truthy(r.get("detected", "0")):
+            pred_detected_count[image] += 1
+        plate = normalize_for_compare(r.get("plate", ""))
+        if plate:
+            pred_by_image[image].append(plate)
 
     n_gt_plates = 0
     n_negatives = 0
@@ -90,26 +109,44 @@ def evaluate(gt_rows, pred_rows):
     cer_sum = 0.0
     tp = fp = fn = tn = 0
 
-    for image, gt_plate in gt_by_image.items():
-        pred = pred_by_image.get(image, {"plate": "", "detected": False})
-        gt_norm = normalize_for_compare(gt_plate)
-        pred_norm = normalize_for_compare(pred["plate"])
-        is_match = bool(gt_norm) and gt_norm == pred_norm
+    for image, gt_list in gt_by_image.items():
+        pred_list = pred_by_image.get(image, [])
+        n_boxes = pred_detected_count.get(image, 0)
 
-        if gt_norm:
-            n_gt_plates += 1
-            if pred["detected"]:
-                n_detected_of_gt += 1
-            if is_match:
-                n_matches += 1
-                tp += 1
-            else:
-                fn += 1
-            cer_sum += char_error_rate(gt_norm, pred_norm)
+        if gt_list:
+            n_gt_plates += len(gt_list)
+            n_detected_of_gt += min(len(gt_list), n_boxes)
+
+            gt_counter = Counter(gt_list)
+            pred_counter = Counter(pred_list)
+            matched_counter = gt_counter & pred_counter
+            matched = sum(matched_counter.values())
+            n_matches += matched
+            tp += matched
+            fn += len(gt_list) - matched
+
+            leftover_gt = list((gt_counter - matched_counter).elements())
+            leftover_pred = list((pred_counter - matched_counter).elements())
+            fp += len(leftover_pred)
+
+            used = [False] * len(leftover_pred)
+            for g in leftover_gt:
+                best_j, best_cer = None, None
+                for j, p in enumerate(leftover_pred):
+                    if used[j]:
+                        continue
+                    c = char_error_rate(g, p)
+                    if best_cer is None or c < best_cer:
+                        best_cer, best_j = c, j
+                if best_j is not None:
+                    used[best_j] = True
+                    cer_sum += best_cer
+                else:
+                    cer_sum += 1.0
         else:
             n_negatives += 1
-            if pred_norm:
-                fp += 1
+            if pred_list:
+                fp += len(pred_list)
             else:
                 tn += 1
 
@@ -211,25 +248,24 @@ def run_predictions(image_dir, out_csv):
         path = os.path.join(image_dir, name)
         result = run_image(path, show_window=False)
 
-        plate, det_conf, ocr_conf = "", 0.0, 0.0
-        detected = 1 if result["plates"] else 0
         if result["plates"]:
-            best_i = max(
-                range(len(result["plates"])),
-                key=lambda i: result["yolo_confs"][i],
-            )
-            plate = result["plates"][best_i]
-            det_conf = result["yolo_confs"][best_i]
-            ocr_conf = result["ocr_confs"][best_i]
-
-        rows.append({
-            "image": name,
-            "detected": detected,
-            "plate": plate,
-            "det_conf": f"{det_conf:.4f}",
-            "ocr_conf": f"{ocr_conf:.4f}",
-        })
-        print(f"[PRED] {name}: detected={detected} plate={plate!r}")
+            # One row per detected box, so multi-plate images are scored fully.
+            for plate, det_conf, ocr_conf in zip(
+                result["plates"], result["yolo_confs"], result["ocr_confs"]
+            ):
+                rows.append({
+                    "image": name,
+                    "detected": 1,
+                    "plate": plate,
+                    "det_conf": f"{det_conf:.4f}",
+                    "ocr_conf": f"{ocr_conf:.4f}",
+                })
+            print(f"[PRED] {name}: {len(result['plates'])} box(es), plates={result['plates']!r}")
+        else:
+            rows.append({
+                "image": name, "detected": 0, "plate": "", "det_conf": "0.0000", "ocr_conf": "0.0000",
+            })
+            print(f"[PRED] {name}: detected=0 plate=''")
 
     write_csv_rows(out_csv, rows, fieldnames)
     return rows

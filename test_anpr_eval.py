@@ -132,20 +132,51 @@ class EvaluateTests(unittest.TestCase):
         ]
         pred = [
             {"image": "a.jpg", "plate": "18A-123.45", "detected": "1"},   # TP
-            {"image": "b.jpg", "plate": "36A-111.11", "detected": "1"},   # FN (wrong)
+            {"image": "b.jpg", "plate": "36A-111.11", "detected": "1"},   # wrong -> FN + FP
             {"image": "bg.jpg", "plate": "12B-345.67", "detected": "1"},  # FP
         ]
         m = evaluate(gt, pred)
+        # TP=1 (a), FN=1 (b's real plate unmatched), FP=2 (b's wrong output + bg's spurious output)
         self.assertEqual(m["recognition_accuracy"], 1 / 2)
-        self.assertAlmostEqual(m["precision"], 1 / 2)  # TP=1, FP=1
-        self.assertAlmostEqual(m["recall"], 1 / 2)      # TP=1, FN=1
-        self.assertAlmostEqual(m["f1"], 1 / 2)
+        self.assertAlmostEqual(m["precision"], 1 / 3)
+        self.assertAlmostEqual(m["recall"], 1 / 2)
+        self.assertAlmostEqual(m["f1"], 2 * (1 / 3) * (1 / 2) / ((1 / 3) + (1 / 2)))
 
     def test_missing_prediction_row_treated_as_no_detection(self):
         gt = [{"image": "a.jpg", "plate": "18A-123.45"}]
         m = evaluate(gt, [])
         self.assertEqual(m["detection_rate"], 0.0)
         self.assertEqual(m["recognition_accuracy"], 0.0)
+
+    def test_multi_plate_image_partial_match(self):
+        gt = [
+            {"image": "multi.jpg", "plate": "29B1-256.62"},
+            {"image": "multi.jpg", "plate": "18B2-547.79"},
+        ]
+        pred = [
+            {"image": "multi.jpg", "plate": "29B1-256.62", "detected": "1"},  # matches plate 1
+            {"image": "multi.jpg", "plate": "18B2-000.00", "detected": "1"},  # wrong reading of plate 2
+        ]
+        m = evaluate(gt, pred)
+        self.assertEqual(m["n_gt_plates"], 2)
+        self.assertEqual(m["tp"], 1)
+        self.assertEqual(m["fn"], 1)
+        self.assertEqual(m["fp"], 1)
+        self.assertEqual(m["detection_rate"], 1.0)  # 2 boxes found for 2 GT plates
+        self.assertEqual(m["recognition_accuracy"], 0.5)
+
+    def test_extra_spurious_detection_on_positive_image_is_fp(self):
+        gt = [{"image": "multi2.jpg", "plate": "29B1-256.62"}]
+        pred = [
+            {"image": "multi2.jpg", "plate": "29B1-256.62", "detected": "1"},  # TP
+            {"image": "multi2.jpg", "plate": "99Z-999.99", "detected": "1"},   # spurious extra box
+        ]
+        m = evaluate(gt, pred)
+        self.assertEqual(m["tp"], 1)
+        self.assertEqual(m["fp"], 1)
+        self.assertEqual(m["fn"], 0)
+        self.assertEqual(m["recall"], 1.0)
+        self.assertAlmostEqual(m["precision"], 0.5)
 
 
 class ReportFormattingTests(unittest.TestCase):
