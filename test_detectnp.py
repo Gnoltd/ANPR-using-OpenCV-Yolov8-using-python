@@ -29,7 +29,7 @@ import pandas as pd
 from DetectNP import (
     filter_text, canonicalize_plate, select_plate_text,
     correct_against_registry, lookup_owner, _valid_plate_bbox,
-    _scale_to_target_height,
+    _scale_to_target_height, save_results,
 )
 
 
@@ -90,6 +90,39 @@ class ValidPlateBboxTests(unittest.TestCase):
 
     def test_too_wide_aspect_ratio_is_invalid(self):
         self.assertFalse(_valid_plate_bbox(0, 0, 500, 20))
+
+
+class SaveResultsCropFileTests(unittest.TestCase):
+    def test_does_not_write_individual_crop_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            img = np.zeros((100, 200, 3), dtype=np.uint8)
+            crop = np.zeros((30, 60, 3), dtype=np.uint8)
+            detections = [{
+                "bbox": (10, 10, 70, 40),
+                "conf": 0.9,
+                "cls": 0,
+                "cls_name": "LicensePlate",
+                "crop": crop,
+            }]
+            save_results(img, detections, [""], save_dir=d, file_stem="test", source_tag="test")
+            files = os.listdir(d)
+            self.assertNotIn("test_10_10.jpg", files)
+
+    def test_still_writes_annotated_image_and_csv_log(self):
+        with tempfile.TemporaryDirectory() as d:
+            img = np.zeros((100, 200, 3), dtype=np.uint8)
+            crop = np.zeros((30, 60, 3), dtype=np.uint8)
+            detections = [{
+                "bbox": (10, 10, 70, 40),
+                "conf": 0.9,
+                "cls": 0,
+                "cls_name": "LicensePlate",
+                "crop": crop,
+            }]
+            save_results(img, detections, [""], save_dir=d, file_stem="test", source_tag="test")
+            files = os.listdir(d)
+            self.assertIn("test_annotated.jpg", files)
+            self.assertIn("anpr_results.csv", files)
 
 
 class ScaleToTargetHeightTests(unittest.TestCase):

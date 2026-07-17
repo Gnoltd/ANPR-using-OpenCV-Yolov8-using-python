@@ -455,8 +455,6 @@ def save_results(image_bgr, detections, ocr_texts, save_dir=SAVE_DIR, file_stem=
             "conf": conf,
             "x1": x1, "y1": y1, "x2": x2, "y2": y2
         })
-        if det.get("crop") is not None:
-            cv2.imwrite(os.path.join(save_dir, f"{file_stem}_{x1}_{y1}.jpg"), det["crop"])
 
     img_path = os.path.join(save_dir, f"{file_stem}_annotated.jpg")
     cv2.imwrite(img_path, out)
