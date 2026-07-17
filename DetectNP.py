@@ -8,10 +8,23 @@ import pandas as pd
 from pathlib import Path
 from ANPR_Yolo.env import *
 from ANPR_Yolo.Load import _load_model, _load_ocr
+from ANPR_Yolo.PlateOCR import classify_plate, load_char_classifier
 
 Path(SAVE_DIR).mkdir(parents=True, exist_ok=True)
 
 _PRINTED_MODEL_INFO = False
+
+_char_classifier_model = None
+
+
+def _get_char_classifier():
+    global _char_classifier_model
+    if _char_classifier_model is None:
+        try:
+            _char_classifier_model = load_char_classifier()
+        except FileNotFoundError:
+            _char_classifier_model = False  # sentinel: tried and unavailable
+    return _char_classifier_model or None
 
 # Compiled plate-format patterns (reused on every frame in video mode)
 _RE_PLATE_FULL  = re.compile(r"^([0-9]{2})([A-Z])-?([0-9]{3})\.?([0-9]{2})$")
@@ -273,9 +286,16 @@ def _scale_to_target_height(crop_bgr, target_h=120):
 
 
 def ocr_it(crop_bgr, joiner='-'):
-    reader = _load_ocr()
     if crop_bgr is None or crop_bgr.size == 0:
         return "", {"all": [], "best_conf": 0.0}
+
+    classifier_model = _get_char_classifier()
+    if classifier_model is not None:
+        classified_text, classifier_conf = classify_plate(crop_bgr, classifier_model)
+        if classified_text:
+            formatted = filter_text(classified_text, strict=True)
+            if formatted:
+                return formatted, {"all": [], "best_conf": classifier_conf}
 
     # scale crop cho chiều cao ~120px để tăng độ nét (scale both up and down)
     crop_bgr = _scale_to_target_height(crop_bgr, target_h=120)
@@ -283,6 +303,7 @@ def ocr_it(crop_bgr, joiner='-'):
     rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
 
     # EasyOCR trả về [(bbox(points4), text, conf), ...]
+    reader = _load_ocr()
     result = reader.readtext(
         rgb,
         detail=1,

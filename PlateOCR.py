@@ -4,8 +4,11 @@ import cv2
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 CHAR_ALPHABET = "0123456789ABCDEFGHKLMNPSTUVXYZ"
+
+MIN_CHAR_CONFIDENCE = 0.5
 
 _CAR_ROW1_COUNT = 8
 _MOTO_ROW1_COUNT = 4
@@ -127,3 +130,35 @@ def load_char_classifier(path="char_classifier.pt"):
     model.load_state_dict(torch.load(path, map_location="cpu"))
     model.eval()
     return model
+
+
+def classify_character(char_img, model):
+    resized = cv2.resize(char_img, (32, 32)) if char_img.shape[:2] != (32, 32) else char_img
+    x = torch.from_numpy(resized).float().unsqueeze(0).unsqueeze(0) / 255.0
+    with torch.no_grad():
+        logits = model(x)
+        probs = F.softmax(logits, dim=1)[0]
+    idx = int(torch.argmax(probs).item())
+    return CHAR_ALPHABET[idx], float(probs[idx].item())
+
+
+def classify_plate(crop_bgr, model, joiner='-'):
+    rows = segment_plate_characters(crop_bgr)
+    if not rows:
+        return "", 0.0
+
+    row_texts = []
+    confidences = []
+    for row in rows:
+        chars = []
+        for char_img in row:
+            ch, conf = classify_character(char_img, model)
+            chars.append(ch)
+            confidences.append(conf)
+        row_texts.append("".join(chars))
+
+    if min(confidences) < MIN_CHAR_CONFIDENCE:
+        return "", 0.0
+
+    text = joiner.join(row_texts) if len(row_texts) > 1 else row_texts[0]
+    return text, min(confidences)

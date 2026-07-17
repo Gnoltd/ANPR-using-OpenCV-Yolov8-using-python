@@ -82,5 +82,60 @@ class SegmentPlateCharactersTests(unittest.TestCase):
         self.assertEqual(segment_plate_characters(None), [])
 
 
+from unittest.mock import MagicMock, patch
+import torch
+
+from PlateOCR import classify_character, classify_plate, CharClassifierCNN
+
+
+class ClassifyCharacterTests(unittest.TestCase):
+    def test_returns_highest_probability_character_and_confidence(self):
+        model = MagicMock()
+        logits = torch.zeros((1, 30))
+        logits[0, 5] = 10.0  # index 5 -> CHAR_ALPHABET[5]
+        model.return_value = logits
+        char_img = np.zeros((32, 32), dtype=np.uint8)
+        ch, conf = classify_character(char_img, model)
+        from PlateOCR import CHAR_ALPHABET
+        self.assertEqual(ch, CHAR_ALPHABET[5])
+        self.assertGreater(conf, 0.9)
+
+
+class ClassifyPlateTests(unittest.TestCase):
+    def test_assembles_single_row_car_plate(self):
+        fake_rows = [[np.zeros((32, 32), dtype=np.uint8) for _ in range(8)]]
+        fake_chars = list("18A12345")
+        with patch("PlateOCR.segment_plate_characters", return_value=fake_rows), \
+             patch("PlateOCR.classify_character", side_effect=[(c, 0.95) for c in fake_chars]):
+            text, conf = classify_plate(np.zeros((10, 10, 3), dtype=np.uint8), model=MagicMock())
+        self.assertEqual(text, "18A12345")
+        self.assertGreater(conf, 0.9)
+
+    def test_assembles_two_row_moto_plate_with_joiner(self):
+        fake_rows = [
+            [np.zeros((32, 32), dtype=np.uint8) for _ in range(4)],
+            [np.zeros((32, 32), dtype=np.uint8) for _ in range(5)],
+        ]
+        fake_chars = list("29B1") + list("25662")
+        with patch("PlateOCR.segment_plate_characters", return_value=fake_rows), \
+             patch("PlateOCR.classify_character", side_effect=[(c, 0.95) for c in fake_chars]):
+            text, conf = classify_plate(np.zeros((10, 10, 3), dtype=np.uint8), model=MagicMock(), joiner="-")
+        self.assertEqual(text, "29B1-25662")
+
+    def test_returns_empty_on_segmentation_failure(self):
+        with patch("PlateOCR.segment_plate_characters", return_value=[]):
+            text, conf = classify_plate(np.zeros((10, 10, 3), dtype=np.uint8), model=MagicMock())
+        self.assertEqual(text, "")
+        self.assertEqual(conf, 0.0)
+
+    def test_returns_empty_when_any_character_confidence_is_low(self):
+        fake_rows = [[np.zeros((32, 32), dtype=np.uint8) for _ in range(8)]]
+        confidences = [0.95] * 7 + [0.2]  # one low-confidence character
+        with patch("PlateOCR.segment_plate_characters", return_value=fake_rows), \
+             patch("PlateOCR.classify_character", side_effect=list(zip("18A12345", confidences))):
+            text, conf = classify_plate(np.zeros((10, 10, 3), dtype=np.uint8), model=MagicMock())
+        self.assertEqual(text, "")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -21,7 +21,7 @@ _register_anpr_yolo_package()
 import unittest
 import csv
 import tempfile
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import numpy as np
 import cv2
 import pandas as pd
@@ -240,6 +240,36 @@ class LookupOwnerRegistryCorrectionTests(unittest.TestCase):
             result = lookup_owner("80A-339.18", path=path)
             self.assertIsNotNone(result)
             self.assertEqual(result["owner_name"], "Nguyen Van A")
+
+
+class OcrItClassifierFallbackTests(unittest.TestCase):
+    def test_uses_classifier_result_when_confident(self):
+        import DetectNP
+        fake_model = MagicMock()
+        with patch("DetectNP._get_char_classifier", return_value=fake_model), \
+             patch("DetectNP.classify_plate", return_value=("18A12345", 0.9)):
+            # _load_ocr is not patched here and must never be called: the
+            # classifier path returns before ocr_it reaches the (now lazy)
+            # reader = _load_ocr() line, so this test also verifies that
+            # laziness by construction - if EasyOCR loading were still
+            # eager, this test would try to load the real model and fail
+            # or hang instead of returning quickly.
+            crop = np.zeros((60, 200, 3), dtype=np.uint8)
+            text, info = DetectNP.ocr_it(crop)
+        self.assertEqual(text, "18A-123.45")  # formatted via filter_text
+
+    def test_falls_back_to_easyocr_when_classifier_not_confident(self):
+        import DetectNP
+        fake_model = MagicMock()
+        with patch("DetectNP._get_char_classifier", return_value=fake_model), \
+             patch("DetectNP.classify_plate", return_value=("", 0.0)), \
+             patch("DetectNP._load_ocr") as mock_load_ocr:
+            mock_reader = MagicMock()
+            mock_reader.readtext.return_value = []
+            mock_load_ocr.return_value = mock_reader
+            crop = np.zeros((60, 200, 3), dtype=np.uint8)
+            text, info = DetectNP.ocr_it(crop)
+        mock_reader.readtext.assert_called()  # fallback path was actually reached
 
 
 if __name__ == "__main__":
