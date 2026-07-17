@@ -188,6 +188,69 @@ Edit `env.py` to tune detection behaviour:
 
 ---
 
+## Evaluation
+
+`anpr_eval.py` measures real-world detection/recognition accuracy against a labeled
+set of images. It has three steps, run via subcommands (or all at once with `run`):
+
+```powershell
+# 1. Derive ground truth from filenames in a folder of images
+python anpr_eval.py build-gt --images path\to\images --out gt.csv
+
+# 2. Run the YOLO+EasyOCR pipeline over the same folder
+python anpr_eval.py predict --images path\to\images --out preds.csv
+
+# 3. Score predictions against ground truth
+python anpr_eval.py eval --preds preds.csv --gt gt.csv
+
+# ...or do all three in one shot
+python anpr_eval.py run --images path\to\images
+```
+
+### Ground-truth filename convention
+
+Ground truth is derived from the image filename stem (no folder or extension):
+
+- `18A-123.45.jpg` → ground-truth plate `18A-123.45`
+- `18A-123.45__front.jpg` → the part before `__` is the plate (`18A-123.45`); use
+  `__<tag>` to disambiguate multiple photos of the same plate
+- `noplate__01.jpg` (or `background`/`negative` as the prefix) → ground-truth plate
+  is empty, i.e. the image has no plate and any prediction on it is a false positive
+
+### preds.csv / gt.csv schema
+
+| Column | Meaning |
+|---|---|
+| `image` | filename (matched between preds.csv and gt.csv) |
+| `plate` | plate text (ground truth in gt.csv; best OCR reading in preds.csv) |
+| `detected` | *(preds.csv only)* `1` if YOLO found at least one plate box, else `0` |
+| `det_conf` | *(preds.csv only)* YOLO confidence of the best box (0 if none) |
+| `ocr_conf` | *(preds.csv only)* EasyOCR confidence of the best reading (0 if none) |
+
+### Metrics
+
+Plate strings are compared using `normalize_for_compare`, which upper-cases and keeps
+only `A-Z0-9` (so `18A-123.45` and `18A12345` are treated as equal) — this scores
+character-recognition correctness independent of punctuation formatting.
+
+For every image with a non-empty ground-truth plate, its prediction is a **match**
+if `normalize_for_compare(pred) == normalize_for_compare(gt)`.
+
+| Metric | Formula |
+|---|---|
+| **Detection Rate** | (images with GT plate where YOLO found ≥1 box) / (images with GT plate) |
+| **Recognition Accuracy** | (images with GT plate where the prediction matches) / (images with GT plate) |
+| **Mean CER** | average Character Error Rate — `edit_distance(pred, gt) / len(gt)` — over images with a GT plate (uncapped; can exceed 1.0 if the prediction is much longer than the ground truth) |
+| **Precision** | TP / (TP + FP) |
+| **Recall** | TP / (TP + FN) — equal to Recognition Accuracy |
+| **F1** | harmonic mean of Precision and Recall |
+
+Where, per image: **TP** = GT plate present and prediction matches; **FN** = GT plate
+present and prediction is missing/wrong; **FP** = GT plate empty (negative image) but
+a non-empty plate was predicted; **TN** = GT plate empty and nothing was predicted.
+
+---
+
 ## Credits
 - [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics)
 - [JaidedAI EasyOCR](https://github.com/JaidedAI/EasyOCR)
