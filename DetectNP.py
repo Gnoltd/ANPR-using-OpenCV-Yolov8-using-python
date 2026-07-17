@@ -16,8 +16,46 @@ _PRINTED_MODEL_INFO = False
 # Compiled plate-format patterns (reused on every frame in video mode)
 _RE_PLATE_FULL  = re.compile(r"^([0-9]{2})([A-Z])-?([0-9]{3})\.?([0-9]{2})$")
 _RE_PLATE_COMP  = re.compile(r"^([0-9]{2})([A-Z])([0-9]{5})$")
+# Motorbike-style series (letter+digit, e.g. B1/V7/L1/U2/S1/V5), dotted or 4-digit-no-dot body
+_RE_PLATE_MOTO_DOT     = re.compile(r"^([0-9]{2})([A-Z][0-9])-?([0-9]{3})\.?([0-9]{2})$")
+_RE_PLATE_MOTO_COMPACT = re.compile(r"^([0-9]{2})([A-Z][0-9])-?([0-9]{4})$")
 _RE_PLATE_CLEAN = re.compile(r"[^A-Z0-9\-\.]")
 _RE_NON_ALNUM   = re.compile(r"[^A-Z0-9]")
+
+
+def _format_full(m):
+    return f"{m.group(1)}{m.group(2)}-{m.group(3)}.{m.group(4)}"
+
+
+def _format_comp(m):
+    s = m.group(3)
+    return f"{m.group(1)}{m.group(2)}-{s[:3]}.{s[3:]}"
+
+
+def _format_moto_compact(m):
+    return f"{m.group(1)}{m.group(2)}-{m.group(3)}"
+
+
+# Tried in order: car-dotted, car-compact, moto-dotted, moto-compact. Car
+# patterns are tried first so an ambiguous fully-compact string (no dash,
+# e.g. could be read as 1-letter+5-digit OR 2-char-series+4-digit) resolves
+# to the car interpretation, which is the more common format.
+_PLATE_PATTERNS = (
+    (_RE_PLATE_FULL, _format_full),
+    (_RE_PLATE_COMP, _format_comp),
+    (_RE_PLATE_MOTO_DOT, _format_full),
+    (_RE_PLATE_MOTO_COMPACT, _format_moto_compact),
+)
+
+
+def _match_plate_format(t):
+    """Try each known plate pattern against t; return the formatted plate
+    string (e.g. "18A-123.45" or "29B1-256.62") or None if none match."""
+    for pat, formatter in _PLATE_PATTERNS:
+        m = pat.match(t)
+        if m:
+            return formatter(m)
+    return None
 
 def _valid_plate_bbox(x1, y1, x2, y2):
     w = max(0, x2 - x1)
@@ -105,30 +143,18 @@ def filter_text(text):
     t = t.replace("—", "-").replace("–", "-").replace("_", "-").replace(" ", "")
     t = _RE_PLATE_CLEAN.sub("", t)
 
-    pat_full = _RE_PLATE_FULL
-    pat_comp = _RE_PLATE_COMP
-    m = pat_full.match(t)
-    if m:  # định dạng đủ, chỉ cần chuẩn hoá dấu
-        return f"{m.group(1)}{m.group(2)}-{m.group(3)}.{m.group(4)}"
-    m = pat_comp.match(t)
-    if m:  # 12A34567 -> 12A-345.67
-        s = m.group(3)
-        return f"{m.group(1)}{m.group(2)}-{s[:3]}.{s[3:]}"
-
+    matched = _match_plate_format(t)
+    if matched:
+        return matched
 
     if len(t) >= 3 and t[0:2].isdigit() and t[2].isdigit():
         digit_to_letter = {"0": "O", "1": "I", "2": "Z", "5": "S", "8": "B", "4": "A"}
         c_fix = digit_to_letter.get(t[2])
         if c_fix:
             t2 = t[:2] + c_fix + t[3:]
-            m = pat_full.match(t2) or pat_comp.match(t2)
-            if m:
-                if len(m.groups()) == 4:
-                    return f"{m.group(1)}{m.group(2)}-{m.group(3)}.{m.group(4)}"
-                else:
-                    s = m.group(3)
-                    return f"{m.group(1)}{m.group(2)}-{s[:3]}.{s[3:]}"
-
+            matched = _match_plate_format(t2)
+            if matched:
+                return matched
 
     compact = _RE_NON_ALNUM.sub("", t)
     return compact if len(compact) >= 5 else ""
@@ -393,14 +419,9 @@ def canonicalize_plate(s: str) -> str:
         t = t[:2] + fix_map.get(t[2], t[2]) + t[3:]
 
 
-    m = _RE_PLATE_FULL.match(t)
-    if m:
-        return f"{m.group(1)}{m.group(2)}-{m.group(3)}.{m.group(4)}"
-
-    m = _RE_PLATE_COMP.match(t)
-    if m:
-        last5 = m.group(3)
-        return f"{m.group(1)}{m.group(2)}-{last5[:3]}.{last5[3:]}"
+    matched = _match_plate_format(t)
+    if matched:
+        return matched
 
     compact = _RE_NON_ALNUM.sub("", t)
     return compact if len(compact) >= 5 else ""
