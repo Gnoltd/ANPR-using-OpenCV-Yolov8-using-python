@@ -85,7 +85,38 @@ class SegmentPlateCharactersTests(unittest.TestCase):
 from unittest.mock import MagicMock, patch
 import torch
 
-from PlateOCR import classify_character, classify_plate, CharClassifierCNN
+from PlateOCR import classify_character, classify_plate, CharClassifierCNN, pad_to_square
+
+
+class PadToSquareTests(unittest.TestCase):
+    def test_pads_narrow_tall_image_to_square(self):
+        img = np.zeros((43, 12), dtype=np.uint8)
+        out = pad_to_square(img)
+        self.assertEqual(out.shape[0], out.shape[1])
+        self.assertEqual(out.shape[0], 43)  # pads to the longer side
+
+    def test_pads_wide_short_image_to_square(self):
+        img = np.zeros((12, 43), dtype=np.uint8)
+        out = pad_to_square(img)
+        self.assertEqual(out.shape[0], out.shape[1])
+        self.assertEqual(out.shape[0], 43)
+
+    def test_already_square_image_unchanged_shape(self):
+        img = np.zeros((32, 32), dtype=np.uint8)
+        out = pad_to_square(img)
+        self.assertEqual(out.shape, (32, 32))
+
+    def test_pad_value_matches_background(self):
+        # A white-background (255), black-ink character crop should pad
+        # with white (255), not black - padding with the wrong color
+        # would look like it belongs to a different, spurious character.
+        img = np.zeros((40, 10), dtype=np.uint8)
+        img[:] = 255
+        img[:, 4:6] = 0
+        out = pad_to_square(img, pad_value=255)
+        # New columns added on the sides should be background (255), not 0
+        self.assertEqual(out[0, 0], 255)
+        self.assertEqual(out[0, -1], 255)
 
 
 class ClassifyCharacterTests(unittest.TestCase):

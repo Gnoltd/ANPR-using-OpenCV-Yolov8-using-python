@@ -101,6 +101,26 @@ def segment_plate_characters(crop_bgr):
     return rows
 
 
+def pad_to_square(img, pad_value=255):
+    """Pads a grayscale image to a square (longer side wins) by adding
+    equal border on the shorter dimension, centering the content. Real
+    character crops from segment_plate_characters are tightly cropped to
+    their ink (often narrow, e.g. a "1"), while synthetic training
+    characters are rendered onto a padded square canvas - resizing a tight
+    real crop straight to a square target distorts its aspect ratio in a
+    way the classifier never saw during training. Padding to square first
+    keeps real and synthetic preprocessing consistent."""
+    h, w = img.shape[:2]
+    side = max(h, w)
+    top = (side - h) // 2
+    bottom = side - h - top
+    left = (side - w) // 2
+    right = side - w - left
+    if top == 0 and bottom == 0 and left == 0 and right == 0:
+        return img
+    return cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=pad_value)
+
+
 class CharClassifierCNN(nn.Module):
     def __init__(self, num_classes=len(CHAR_ALPHABET)):
         super().__init__()
@@ -133,7 +153,8 @@ def load_char_classifier(path="char_classifier.pt"):
 
 
 def classify_character(char_img, model):
-    resized = cv2.resize(char_img, (32, 32)) if char_img.shape[:2] != (32, 32) else char_img
+    squared = pad_to_square(char_img)
+    resized = cv2.resize(squared, (32, 32)) if squared.shape[:2] != (32, 32) else squared
     x = torch.from_numpy(resized).float().unsqueeze(0).unsqueeze(0) / 255.0
     with torch.no_grad():
         logits = model(x)

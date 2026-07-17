@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import TensorDataset, DataLoader, random_split
 from PIL import Image, ImageDraw, ImageFont
 
-from PlateOCR import CHAR_ALPHABET, CharClassifierCNN, segment_plate_characters
+from PlateOCR import CHAR_ALPHABET, CharClassifierCNN, segment_plate_characters, pad_to_square
 
 
 def _register_anpr_yolo_from_here():
@@ -195,7 +195,8 @@ def extract_real_char_dataset(gt_rows, load_crops_fn):
         for char_img, expected_char in zip(matched_flat_chars, expected):
             if expected_char not in CHAR_ALPHABET:
                 continue
-            images.append(_cv2.resize(char_img, (32, 32)))
+            squared = pad_to_square(char_img)
+            images.append(_cv2.resize(squared, (32, 32)))
             labels.append(CHAR_ALPHABET.index(expected_char))
     return images, labels
 
