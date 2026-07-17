@@ -25,7 +25,7 @@ import pandas as pd
 
 from DetectNP import (
     filter_text, canonicalize_plate, select_plate_text,
-    correct_against_registry, lookup_owner,
+    correct_against_registry, lookup_owner, _valid_plate_bbox,
 )
 
 
@@ -69,6 +69,23 @@ class CanonicalizePlateMotorbikeFormatTests(unittest.TestCase):
 
     def test_car_plate_regression(self):
         self.assertEqual(canonicalize_plate("18A-123.45"), "18A-123.45")
+
+
+class ValidPlateBboxTests(unittest.TestCase):
+    def test_plate_shaped_box_is_valid(self):
+        self.assertTrue(_valid_plate_bbox(0, 0, 100, 30))
+
+    def test_tiny_box_below_min_area_is_invalid(self):
+        self.assertFalse(_valid_plate_bbox(0, 0, 10, 10))
+
+    def test_zero_height_box_is_invalid(self):
+        self.assertFalse(_valid_plate_bbox(0, 0, 100, 0))
+
+    def test_too_narrow_aspect_ratio_is_invalid(self):
+        self.assertFalse(_valid_plate_bbox(0, 0, 20, 200))
+
+    def test_too_wide_aspect_ratio_is_invalid(self):
+        self.assertFalse(_valid_plate_bbox(0, 0, 500, 20))
 
 
 class FilterTextStrictModeTests(unittest.TestCase):
@@ -131,6 +148,15 @@ class CorrectAgainstRegistryTests(unittest.TestCase):
             {"plate": "80A-339.13", "owner_name": "B", "phone": "", "notes": ""},
         ])
         self.assertEqual(correct_against_registry("80A-339.18", registry), "80A-339.18")
+
+    def test_single_unambiguous_iv_correction(self):
+        # I/V only does real work at the series-letter position: canonicalize_plate's
+        # digit-at-series-position repair defaults an OCR'd "1" there to "I", so a
+        # true "V" series plate needs this pair to resolve against the registry.
+        registry = _make_registry([
+            {"plate": "29V5-2108", "owner_name": "A", "phone": "", "notes": ""},
+        ])
+        self.assertEqual(correct_against_registry("29I5-2108", registry), "29V5-2108")
 
 
 class LookupOwnerRegistryCorrectionTests(unittest.TestCase):

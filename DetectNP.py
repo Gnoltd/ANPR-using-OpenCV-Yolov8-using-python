@@ -123,7 +123,7 @@ def detect_fn(image_bgr):
 
 
         if not _valid_plate_bbox(x1, y1, x2, y2):
-            pass
+            continue
 
         crop = image_bgr[y1:y2, x1:x2].copy()
         dets.append({
