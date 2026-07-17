@@ -2,9 +2,11 @@ import random
 
 import cv2
 import numpy as np
+import torch
+from torch.utils.data import TensorDataset, DataLoader, random_split
 from PIL import Image, ImageDraw, ImageFont
 
-from PlateOCR import CHAR_ALPHABET
+from PlateOCR import CHAR_ALPHABET, CharClassifierCNN
 
 # Bold sans-serif approximation of the FE-Schrift plate font (TCVN 4888:2019).
 # Windows ships "arialbd.ttf" (Arial Bold) by default; if unavailable at
@@ -82,3 +84,53 @@ def generate_synthetic_dataset(n_per_class=300, size=32, font_path=None):
             images.append(generate_synthetic_char(char, size=size, font_path=font_path))
             labels.append(label)
     return np.stack(images), np.array(labels, dtype=np.int64)
+
+
+def _to_tensor_dataset(images, labels):
+    x = torch.from_numpy(images).float().unsqueeze(1) / 255.0  # (N, 1, H, W), normalized
+    y = torch.from_numpy(labels).long()
+    return TensorDataset(x, y)
+
+
+def train_on_synthetic(n_per_class=300, epochs=15, batch_size=64, size=32, out_path="char_classifier.pt"):
+    images, labels = generate_synthetic_dataset(n_per_class=n_per_class, size=size)
+    dataset = _to_tensor_dataset(images, labels)
+
+    val_size = max(1, int(0.15 * len(dataset)))
+    train_size = len(dataset) - val_size
+    train_ds, val_ds = random_split(dataset, [train_size, val_size])
+
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=batch_size)
+
+    model = CharClassifierCNN()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    criterion = torch.nn.CrossEntropyLoss()
+
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0.0
+        for xb, yb in train_loader:
+            optimizer.zero_grad()
+            out = model(xb)
+            loss = criterion(out, yb)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item() * xb.size(0)
+
+        model.eval()
+        correct = 0
+        with torch.no_grad():
+            for xb, yb in val_loader:
+                pred = model(xb).argmax(dim=1)
+                correct += (pred == yb).sum().item()
+        val_acc = correct / len(val_ds)
+        print(f"epoch {epoch + 1}/{epochs}  train_loss={total_loss / train_size:.4f}  val_acc={val_acc:.1%}")
+
+    torch.save(model.state_dict(), out_path)
+    print(f"Saved {out_path}")
+    return model
+
+
+if __name__ == "__main__":
+    train_on_synthetic()

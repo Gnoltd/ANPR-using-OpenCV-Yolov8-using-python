@@ -21,7 +21,7 @@ _register_anpr_yolo_package()
 import unittest
 import numpy as np
 
-from PlateOCR import CHAR_ALPHABET
+from PlateOCR import CHAR_ALPHABET, CharClassifierCNN
 from train_char_classifier import generate_synthetic_char, generate_synthetic_dataset
 
 
@@ -51,6 +51,19 @@ class GenerateSyntheticDatasetTests(unittest.TestCase):
     def test_labels_cover_full_alphabet_range(self):
         images, labels = generate_synthetic_dataset(n_per_class=5, size=32)
         self.assertEqual(set(labels.tolist()), set(range(len(CHAR_ALPHABET))))
+
+
+import torch
+
+
+class CharClassifierCNNTests(unittest.TestCase):
+    def test_forward_pass_output_shape(self):
+        model = CharClassifierCNN()
+        model.eval()
+        x = torch.zeros((4, 1, 32, 32), dtype=torch.float32)
+        with torch.no_grad():
+            out = model(x)
+        self.assertEqual(tuple(out.shape), (4, len(CHAR_ALPHABET)))
 
 
 if __name__ == "__main__":

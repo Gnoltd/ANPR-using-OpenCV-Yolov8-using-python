@@ -1,5 +1,9 @@
+import os
+
 import cv2
 import numpy as np
+import torch
+import torch.nn as nn
 
 CHAR_ALPHABET = "0123456789ABCDEFGHKLMNPSTUVXYZ"
 
@@ -92,3 +96,34 @@ def segment_plate_characters(crop_bgr):
         return []
 
     return rows
+
+
+class CharClassifierCNN(nn.Module):
+    def __init__(self, num_classes=len(CHAR_ALPHABET)):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(1, 16, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),   # 32 -> 16
+            nn.Conv2d(16, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),  # 16 -> 8
+            nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),  # 8 -> 4
+        )
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(64 * 4 * 4, 128), nn.ReLU(), nn.Dropout(0.3),
+            nn.Linear(128, num_classes),
+        )
+
+    def forward(self, x):
+        x = self.features(x)
+        return self.classifier(x)
+
+
+def load_char_classifier(path="char_classifier.pt"):
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Character classifier weights not found: {path}\n"
+            "Run train_char_classifier.py to generate them."
+        )
+    model = CharClassifierCNN()
+    model.load_state_dict(torch.load(path, map_location="cpu"))
+    model.eval()
+    return model
