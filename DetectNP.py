@@ -200,7 +200,7 @@ def save_registry(df: pd.DataFrame, path: str = REGISTRY_CSV):
     df["plate_norm"] = df["plate"].apply(canonicalize_plate)
     df.to_csv(path, index=False, encoding="utf-8-sig")
 
-_CONFUSABLE_PAIRS = (("3", "8"), ("I", "V"), ("O", "0"), ("1", "I"), ("S", "5"))
+_CONFUSABLE_PAIRS = (("3", "8"), ("I", "V"))
 
 
 def _confusable_variants(text: str) -> set:
