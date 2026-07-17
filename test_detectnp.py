@@ -19,7 +19,7 @@ def _register_anpr_yolo_package():
 _register_anpr_yolo_package()
 
 import unittest
-from DetectNP import filter_text, canonicalize_plate
+from DetectNP import filter_text, canonicalize_plate, select_plate_text
 
 
 class FilterTextCarFormatTests(unittest.TestCase):
@@ -62,6 +62,35 @@ class CanonicalizePlateMotorbikeFormatTests(unittest.TestCase):
 
     def test_car_plate_regression(self):
         self.assertEqual(canonicalize_plate("18A-123.45"), "18A-123.45")
+
+
+class FilterTextStrictModeTests(unittest.TestCase):
+    def test_strict_true_returns_empty_for_unformatted_text(self):
+        self.assertEqual(filter_text("RANDOMTEXT123", strict=True), "")
+
+    def test_strict_true_still_matches_valid_car_format(self):
+        self.assertEqual(filter_text("18A-123.45", strict=True), "18A-123.45")
+
+    def test_strict_false_keeps_loose_fallback_behavior(self):
+        self.assertEqual(filter_text("RANDOMTEXT123", strict=False), "RANDOMTEXT123")
+
+
+class SelectPlateTextTests(unittest.TestCase):
+    def test_strict_match_on_first_candidate_wins(self):
+        candidates = ["18A-123.45", "18A 123.45 EXTRA"]
+        self.assertEqual(select_plate_text(candidates), "18A-123.45")
+
+    def test_strict_match_on_later_candidate_preferred_over_earlier_loose_match(self):
+        candidates = ["10DTM5INWJRS6VEHICVFHP", "18A-123.45"]
+        self.assertEqual(select_plate_text(candidates), "18A-123.45")
+
+    def test_falls_back_to_loose_match_when_no_strict_match_exists(self):
+        candidates = ["10DTM5INWJRS6VEHICVFHP", "SHORT"]
+        self.assertEqual(select_plate_text(candidates), "10DTM5INWJRS6VEHICVFHP")
+
+    def test_empty_string_when_nothing_qualifies(self):
+        candidates = ["AB", "1"]
+        self.assertEqual(select_plate_text(candidates), "")
 
 
 if __name__ == "__main__":

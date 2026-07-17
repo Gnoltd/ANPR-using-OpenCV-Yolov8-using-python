@@ -135,7 +135,7 @@ def detect_fn(image_bgr):
         })
     return dets
 
-def filter_text(text):
+def filter_text(text, strict=False):
     if not text:
         return ""
 
@@ -156,8 +156,27 @@ def filter_text(text):
             if matched:
                 return matched
 
+    if strict:
+        return ""
+
     compact = _RE_NON_ALNUM.sub("", t)
     return compact if len(compact) >= 5 else ""
+
+
+def select_plate_text(candidates):
+    """Given OCR candidate strings in preference order, return the first
+    that strictly matches a known plate format; if none do, fall back to
+    the first that satisfies the loose alphanumeric-length heuristic;
+    else "" if nothing qualifies."""
+    for cand in candidates:
+        ft = filter_text(cand, strict=True)
+        if ft:
+            return ft
+    for cand in candidates:
+        ft = filter_text(cand)
+        if ft:
+            return ft
+    return ""
 
 def load_registry(path: str = REGISTRY_CSV) -> pd.DataFrame:
     if os.path.exists(path):
@@ -257,13 +276,11 @@ def ocr_it(crop_bgr, joiner='-'):
     if len(row_texts) == 1:
         candidates.append(row_texts[0])
 
-    # Chọn ứng viên khớp pattern VN
-    for cand in candidates:
-        ft = filter_text(cand)
-        if ft:
-            # details
-            all_items = [{"text": t, "conf": 0.0} for t in row_texts]
-            return ft, {"all": all_items, "best_conf": max((c for *_ , c in items), default=0.0)}
+    # Chọn ứng viên khớp pattern VN (ưu tiên khớp định dạng chuẩn trước khi rơi vào fallback)
+    ft = select_plate_text(candidates)
+    if ft:
+        all_items = [{"text": t, "conf": 0.0} for t in row_texts]
+        return ft, {"all": all_items, "best_conf": max((c for *_ , c in items), default=0.0)}
 
     # Fallback: lấy dòng có conf cao nhất rồi lọc
     best = max(items, key=lambda z: z[3])[2]
