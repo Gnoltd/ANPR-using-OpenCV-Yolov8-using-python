@@ -27,10 +27,34 @@ distinct, independent causes:
 3. In photos with 3 plates in frame, YOLO found only 1-2 boxes — it's
    missing the smaller/farther plates, not misreading them.
 
+A fourth, independent issue was found afterward while scoping #1: `ocr_it()`
+in `DetectNP.py` assumes any image where EasyOCR detects ≥2 text rows is a
+2-line Vietnamese plate, and joins the first two rows as the reading. On the
+US benchmark set (`eval_images/`), this produced garbage like predicting
+`10DTM5INWJRS6VEHICVFHP` for ground truth `10DTM` — EasyOCR had picked up a
+second, unrelated text region (state name / registration sticker) in the
+crop, and `filter_text`'s fallback ("strip punctuation, accept anything
+≥5 alphanumeric chars") accepted the garbled join without ever trying the
+plausible single-line reading. **Note on expected impact:** this specific
+failure mode was not observed in any of the 11 real Vietnamese ground-truth
+plates in `eval_images_vn/` (their 2-row joins are legitimate — real VN
+motorbike plates *are* two lines) — the VN failures there are pure
+character-level OCR misreads, which this fix cannot repair. It's included as
+a robustness fix (protects against stray sticker/watermark text on any
+photo, VN or not) rather than something expected to raise the VN eval numbers.
+
 ## Goals
 
 - Extend plate-format normalization to correctly format motorbike-style
   letter+digit series plates, so they don't fall into the mangling fallback.
+  **Expected impact is display/CSV formatting quality, not the accuracy
+  numbers** — `anpr_eval.py`'s comparison already strips punctuation via
+  `normalize_for_compare`, so `29V7-076.94` and `29V707694` score
+  identically either way.
+- Make OCR candidate selection prefer a candidate that matches a known plate
+  format over one that only satisfies the loose "≥5 alphanumeric characters"
+  fallback, so a spurious multi-row join doesn't win over a plausible
+  single-line reading.
 - Where an OCR'd plate doesn't resolve to a known owner, try safe
   single-character confusable substitutions and use one if it uniquely
   resolves to a registered plate.
@@ -77,7 +101,61 @@ This is pure string/regex logic — testable without YOLO/EasyOCR/torch, in
 a new `test_detectnp.py` (mirrors how `test_anpr_eval.py` isolates pure
 logic from the ML pipeline).
 
-### 2. Registry-assisted confusable-character correction (`DetectNP.py`)
+### 2. Strict-format candidate preference in OCR (`DetectNP.py`)
+
+`filter_text` gains a `strict: bool = False` parameter. With `strict=True`,
+it runs only the pattern-matching branches (car-dotted, car-compact,
+moto-dotted, moto-compact, and the digit-at-series-position repair) and
+returns `""` if none match — it never falls through to the "strip
+punctuation, accept ≥5 alphanumeric chars" fallback.
+
+A new pure function, extracted from `ocr_it`'s current inline loop so it's
+unit-testable without EasyOCR:
+
+```python
+def select_plate_text(candidates):
+    """Given OCR candidate strings in preference order, return the first
+    that strictly matches a known plate format; if none do, fall back to
+    the first that satisfies the loose alphanumeric-length heuristic;
+    else "" if nothing qualifies."""
+    for cand in candidates:
+        ft = filter_text(cand, strict=True)
+        if ft:
+            return ft
+    for cand in candidates:
+        ft = filter_text(cand)
+        if ft:
+            return ft
+    return ""
+```
+
+`ocr_it` replaces its current single-pass `for cand in candidates: ft =
+filter_text(cand); if ft: ...` loop with a call to `select_plate_text(candidates)`,
+keeping the rest of `ocr_it` (confidence bookkeeping, final fallback to the
+highest-confidence row when no candidate matches at all) unchanged.
+
+This preserves all current behavior when nothing strictly matches (the
+final fallback branch is untouched, byte-for-byte the same loop as today),
+and only changes outcomes when a *later* candidate would have strictly
+matched a known VN plate format but an *earlier* candidate would have
+already satisfied the loose fallback first.
+
+**Important limitation, confirmed by re-checking the actual failure case:**
+this does **not** fix `10DTM5INWJRS6VEHICVFHP` (ground truth `10DTM`). US
+plates aren't VN-formatted, so neither candidate for that image (`row0-
+row1` joined, or all-rows space-joined) ever strictly matches, in either
+pass — both passes end up at the same loose-fallback result as today. Fixing
+that specific case would require either recognizing US plate formats too
+(out of scope — this is a Vietnamese-plate-recognition project) or trying
+each OCR'd row as its own candidate rather than only joined combinations
+(a larger change to `ocr_it`'s candidate construction, not just the
+matching loop — not included here). This component only helps the case
+where a *VN-formatted* reading exists among the current candidates but
+isn't the first one tried — plausible for real VN photos with stray
+reflections/stickers, but not demonstrated by any sample in the current
+11-plate `eval_images_vn/` set.
+
+### 3. Registry-assisted confusable-character correction (`DetectNP.py`)
 
 New function in `DetectNP.py`:
 
@@ -107,7 +185,7 @@ before giving up.
 Testable with an in-memory `pd.DataFrame` registry fixture — no real CSV
 or ML dependency needed.
 
-### 3. Detection-threshold experiment (not a code-behavior change by default)
+### 4. Detection-threshold experiment (not a code-behavior change by default)
 
 Using a throwaway script (not committed), re-run `anpr_eval.py predict` +
 `eval` over `eval_images/` and `eval_images_vn/` with `CONF_THRES` lowered
@@ -121,17 +199,23 @@ of forcing a change.
 
 ## Testing
 
-- `test_detectnp.py` (new): unit tests for `filter_text`, `canonicalize_plate`
+- `test_detectnp.py` (new): unit tests for `filter_text` (both `strict=False`
+  regression behavior and new `strict=True` behavior), `canonicalize_plate`
   covering car format (regression), motorbike-dotted, motorbike-compact,
   and the digit-at-series-position repair, using real strings observed in
   the eval data (`29B1-256.62`, `29U2-7914`, etc.).
+- Same file: unit tests for `select_plate_text` covering: a strict match
+  found on the first candidate, a strict match found only on a later
+  candidate (preferred over an earlier loose-only match), no strict match
+  anywhere but a loose match exists, and no candidate qualifies at all.
 - Same file: unit tests for `correct_against_registry` with a fixture
   registry DataFrame, covering: exact match (no correction needed), single
   unambiguous correction, zero corrections found, and ambiguous (>1 match)
   correction (no change).
-- After implementing #1, re-run `anpr_eval.py eval` against the existing
-  `preds_vn.csv`/`gt_vn.csv` — expect `mean_cer` to drop for the
-  motorbike-format entries even though several will still not be exact
-  matches (the digit confusions from #2 are registry-scoped, not fixed for
-  these unregistered benchmark plates).
-- #3 is validated by its own before/after eval report, not unit tests.
+- After implementing #1/#2, re-run `anpr_eval.py eval` against the existing
+  `preds_vn.csv`/`gt_vn.csv` as a sanity check — recognition accuracy is
+  expected to stay roughly the same (the 10 current VN misses are
+  character-level OCR errors neither fix touches, per the Context section
+  above); this is a regression check, not a targeted improvement
+  measurement, and that's expected going in.
+- #4 is validated by its own before/after eval report, not unit tests.
