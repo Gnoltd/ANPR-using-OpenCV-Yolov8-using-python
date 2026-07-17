@@ -19,7 +19,14 @@ def _register_anpr_yolo_package():
 _register_anpr_yolo_package()
 
 import unittest
-from DetectNP import filter_text, canonicalize_plate, select_plate_text
+import csv
+import tempfile
+import pandas as pd
+
+from DetectNP import (
+    filter_text, canonicalize_plate, select_plate_text,
+    correct_against_registry, lookup_owner,
+)
 
 
 class FilterTextCarFormatTests(unittest.TestCase):
@@ -91,6 +98,52 @@ class SelectPlateTextTests(unittest.TestCase):
     def test_empty_string_when_nothing_qualifies(self):
         candidates = ["AB", "1"]
         self.assertEqual(select_plate_text(candidates), "")
+
+
+def _make_registry(rows):
+    df = pd.DataFrame(rows, columns=["plate", "owner_name", "phone", "notes"])
+    df["plate_norm"] = df["plate"].apply(canonicalize_plate)
+    return df
+
+
+class CorrectAgainstRegistryTests(unittest.TestCase):
+    def test_exact_match_returns_plate_unchanged(self):
+        registry = _make_registry([
+            {"plate": "30A-339.18", "owner_name": "A", "phone": "", "notes": ""},
+        ])
+        self.assertEqual(correct_against_registry("30A-339.18", registry), "30A-339.18")
+
+    def test_single_unambiguous_confusable_correction(self):
+        registry = _make_registry([
+            {"plate": "30A-339.18", "owner_name": "A", "phone": "", "notes": ""},
+        ])
+        self.assertEqual(correct_against_registry("80A-339.18", registry), "30A-339.18")
+
+    def test_no_correction_when_no_registry_match_found(self):
+        registry = _make_registry([
+            {"plate": "30A-339.18", "owner_name": "A", "phone": "", "notes": ""},
+        ])
+        self.assertEqual(correct_against_registry("99Z-999.99", registry), "99Z-999.99")
+
+    def test_no_correction_when_ambiguous(self):
+        registry = _make_registry([
+            {"plate": "30A-339.18", "owner_name": "A", "phone": "", "notes": ""},
+            {"plate": "80A-339.13", "owner_name": "B", "phone": "", "notes": ""},
+        ])
+        self.assertEqual(correct_against_registry("80A-339.18", registry), "80A-339.18")
+
+
+class LookupOwnerRegistryCorrectionTests(unittest.TestCase):
+    def test_lookup_owner_applies_registry_correction(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "registry.csv")
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.writer(f)
+                writer.writerow(["plate", "owner_name", "phone", "notes"])
+                writer.writerow(["30A-339.18", "Nguyen Van A", "0900000000", ""])
+            result = lookup_owner("80A-339.18", path=path)
+            self.assertIsNotNone(result)
+            self.assertEqual(result["owner_name"], "Nguyen Van A")
 
 
 if __name__ == "__main__":

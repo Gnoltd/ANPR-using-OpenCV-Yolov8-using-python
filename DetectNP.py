@@ -200,12 +200,59 @@ def save_registry(df: pd.DataFrame, path: str = REGISTRY_CSV):
     df["plate_norm"] = df["plate"].apply(canonicalize_plate)
     df.to_csv(path, index=False, encoding="utf-8-sig")
 
+_CONFUSABLE_PAIRS = (("3", "8"), ("I", "V"), ("O", "0"), ("1", "I"), ("S", "5"))
+
+
+def _confusable_variants(text: str) -> set:
+    variants = set()
+    chars = list(text)
+    for i, ch in enumerate(chars):
+        for a, b in _CONFUSABLE_PAIRS:
+            replacement = None
+            if ch == a:
+                replacement = b
+            elif ch == b:
+                replacement = a
+            if replacement is not None:
+                swapped = chars.copy()
+                swapped[i] = replacement
+                variants.add("".join(swapped))
+    variants.discard(text)
+    return variants
+
+
+def correct_against_registry(plate: str, registry_df: pd.DataFrame) -> str:
+    """If `plate` has no registry match, try single-character confusable
+    substitutions; if exactly one substitution matches a registered plate,
+    return that corrected plate. Otherwise return `plate` unchanged."""
+    key = canonicalize_plate(plate)
+    if not key:
+        return plate
+
+    known_norms = set(registry_df["plate_norm"])
+    if key in known_norms:
+        return plate
+
+    matched_norms = {v for v in _confusable_variants(key) if v in known_norms}
+    if len(matched_norms) != 1:
+        return plate
+
+    matched_norm = next(iter(matched_norms))
+    row = registry_df[registry_df["plate_norm"] == matched_norm].iloc[0]
+    return row["plate"]
+
+
 def lookup_owner(plate: str, path: str = REGISTRY_CSV):
     if not plate:
         return None
     df = load_registry(path)
     key = canonicalize_plate(plate)
     row = df[df["plate_norm"] == key]
+    if row.empty:
+        corrected = correct_against_registry(plate, df)
+        if corrected != plate:
+            key = canonicalize_plate(corrected)
+            row = df[df["plate_norm"] == key]
     if not row.empty and row.iloc[0].get("owner_name","").strip():
         r = row.iloc[0].to_dict()
         return {
