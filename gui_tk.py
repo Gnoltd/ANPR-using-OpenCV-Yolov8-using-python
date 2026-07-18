@@ -452,6 +452,18 @@ class App(tk.Tk):
     # buys, so the stream loop temporarily lowers it for its own duration.
     STREAM_IMGSZ = 640
 
+    # No GPU on this machine: detect_fn costs ~120-200ms/frame even at
+    # imgsz=640, and the LP character detector ~380ms/plate - together
+    # far over the ~35-50ms budget a 20-30 FPS target allows. Detection
+    # and OCR only run every Nth frame; cached boxes/text are redrawn on
+    # the frames in between (a redraw-only frame costs ~8ms). Modeled
+    # against measured per-stage costs: detect_every_n=8, ocr_every_n=24
+    # averages to ~43ms/frame (~23 FPS) - box positions refresh ~3x/sec,
+    # plate text ~1x/sec. Raise these for fresher updates at lower FPS;
+    # lower them for higher FPS with staler updates.
+    DETECT_EVERY_N = 8
+    OCR_EVERY_N = 24
+
     def _stream_worker(self, source):
         original_imgsz = None
         try:
@@ -475,8 +487,11 @@ class App(tk.Tk):
             cap.set(cv2.CAP_PROP_FPS, 30)
 
             last_boxes: list = []    # [(bbox, plate, ocr_conf)]
+            last_det_infos: list = []
             last_ocr_idx = -999
-            ocr_every_n = 8
+            last_detect_idx = -999
+            detect_every_n = self.DETECT_EVERY_N
+            ocr_every_n = self.OCR_EVERY_N
             iou_keep = 0.45
             seen: dict = {}          # plate -> frame_idx (debounce)
             debounce = 30
@@ -490,55 +505,83 @@ class App(tk.Tk):
                     break
 
                 tic = time.perf_counter()
-                dets = []
-                try:
-                    dets = detect_fn(frame)
-                except Exception:
-                    pass
+                do_detect = (idx - last_detect_idx) >= detect_every_n
 
-                do_ocr = (idx - last_ocr_idx) >= ocr_every_n
-                new_boxes: list = []
-                det_infos: list = []
-
-                for d in dets:
-                    bb = d.get("bbox")
-                    if not bb:
-                        continue
-                    yolo_conf = d.get("conf", 0.0)
-                    ocr_conf = 0.0
-
-                    reused = None
-                    if not do_ocr and last_boxes:
-                        for bb_old, txt_old, oc_old in last_boxes:
-                            if iou_fn(bb, bb_old) >= iou_keep:
-                                reused = (txt_old, oc_old)
-                                break
-
-                    if reused:
-                        plate, ocr_conf = reused
-                    else:
-                        try:
-                            raw_txt, oi = ocr_it(d.get("crop"))
-                            plate = filter_text(raw_txt)
-                            ocr_conf = (oi or {}).get("best_conf", 0.0)
-                        except Exception:
-                            plate, ocr_conf = "", 0.0
-
-                    owner = ""
+                if do_detect:
+                    dets = []
                     try:
-                        rec = lookup_owner(plate) if plate else None
-                        owner = rec["owner_name"] if rec else ""
+                        dets = detect_fn(frame)
                     except Exception:
                         pass
 
-                    new_boxes.append((bb, plate, ocr_conf))
-                    det_infos.append({
-                        "plate": plate, "yolo_conf": yolo_conf,
-                        "ocr_conf": ocr_conf, "owner": owner,
-                    })
+                    do_ocr = (idx - last_ocr_idx) >= ocr_every_n
+                    new_boxes: list = []
+                    det_infos: list = []
 
-                    # draw on frame
+                    for d in dets:
+                        bb = d.get("bbox")
+                        if not bb:
+                            continue
+                        yolo_conf = d.get("conf", 0.0)
+                        ocr_conf = 0.0
+
+                        reused = None
+                        if not do_ocr and last_boxes:
+                            for bb_old, txt_old, oc_old in last_boxes:
+                                if iou_fn(bb, bb_old) >= iou_keep:
+                                    reused = (txt_old, oc_old)
+                                    break
+
+                        if reused:
+                            plate, ocr_conf = reused
+                        else:
+                            try:
+                                raw_txt, oi = ocr_it(d.get("crop"))
+                                plate = filter_text(raw_txt)
+                                ocr_conf = (oi or {}).get("best_conf", 0.0)
+                            except Exception:
+                                plate, ocr_conf = "", 0.0
+
+                        owner = ""
+                        try:
+                            rec = lookup_owner(plate) if plate else None
+                            owner = rec["owner_name"] if rec else ""
+                        except Exception:
+                            pass
+
+                        new_boxes.append((bb, plate, ocr_conf))
+                        det_infos.append({
+                            "plate": plate, "yolo_conf": yolo_conf,
+                            "ocr_conf": ocr_conf, "owner": owner,
+                            "bbox": bb, "cls_name": d.get("cls_name", "plate"),
+                        })
+
+                        # debounced history log
+                        if plate and (idx - seen.get(plate, -debounce * 2)) > debounce:
+                            seen[plate] = idx
+                            self._q.put(("hist", plate, yolo_conf, time.time()))
+
+                    if do_ocr:
+                        last_ocr_idx = idx
+                    last_boxes = new_boxes
+                    last_det_infos = det_infos
+                    last_detect_idx = idx
+                else:
+                    # Skip detect_fn/ocr_it entirely this frame (the
+                    # dominant costs on this CPU) - redraw the last known
+                    # boxes/labels on the current frame instead, so the
+                    # displayed video stays smooth between real detection
+                    # cycles rather than flickering or stalling.
+                    det_infos = last_det_infos
+
+                # draw current box/label set (fresh this cycle, or reused)
+                for info in det_infos:
+                    bb = info.get("bbox")
+                    if not bb:
+                        continue
                     x1, y1, x2, y2 = bb
+                    plate = info["plate"]
+                    owner = info["owner"]
                     color = (0, 220, 100)
                     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                     if plate and owner:
@@ -546,18 +589,9 @@ class App(tk.Tk):
                     elif plate:
                         label = f"{plate} | Owner : Unknown"
                     else:
-                        label = f"{d.get('cls_name', 'plate')} {yolo_conf:.2f}"
+                        label = f"{info.get('cls_name', 'plate')} {info['yolo_conf']:.2f}"
                     cv2.putText(frame, label, (x1, max(0, y1 - 8)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-                    # debounced history log
-                    if plate and (idx - seen.get(plate, -debounce * 2)) > debounce:
-                        seen[plate] = idx
-                        self._q.put(("hist", plate, yolo_conf, time.time()))
-
-                if do_ocr:
-                    last_ocr_idx = idx
-                last_boxes = new_boxes
 
                 # FPS overlay
                 inst = 1.0 / max(1e-6, time.perf_counter() - tic)
