@@ -14,8 +14,10 @@ from gui.registry_tab import RegistryTab
 from gui.settings_tab import SettingsTab
 
 try:
+    import ANPR_Yolo.DetectNP as DetectNP
     from ANPR_Yolo.DetectNP import detect_fn, ocr_it, filter_text, lookup_owner, iou
 except ImportError:
+    import DetectNP as DetectNP
     from DetectNP import detect_fn, ocr_it, filter_text, lookup_owner, iou
 
 class App(ctk.CTk):
@@ -174,15 +176,18 @@ class App(ctk.CTk):
             resized = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_LINEAR)
             rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
             pil_img = Image.fromarray(rgb)
-            
-            self._q.put(("frame", pil_img, det_infos, f"{fw}x{fh}"))
+            self._q.put(("frame", pil_img, det_infos, f"{fw}x{fh}", None))
         except Exception as e:
             self._q.put(("error", str(e)))
         finally:
             self._q.put(("done",))
 
     def _stream_worker(self, source):
+        original_imgsz = None
         try:
+            original_imgsz = DetectNP.ANPR_IMGSZ
+            DetectNP.ANPR_IMGSZ = 640  # Temporarily lower for live stream responsiveness
+
             cap = cv2.VideoCapture(source, cv2.CAP_DSHOW) if isinstance(source, int) else cv2.VideoCapture(source)
             if not cap.isOpened():
                 raise RuntimeError("Cannot open stream source")
@@ -190,11 +195,18 @@ class App(ctk.CTk):
             idx = 0
             last_boxes = []
             last_det_infos = []
+            fps_ema = None
+            alpha = 0.2
+            prev_frame_tic = time.perf_counter()
 
             while self._running:
                 ok, frame = cap.read()
                 if not ok:
                     break
+
+                now = time.perf_counter()
+                inst = 1.0 / max(1e-6, now - prev_frame_tic)
+                prev_frame_tic = now
 
                 cfg = self.get_config()
                 do_detect = (idx % cfg["detect_every_n"]) == 0
@@ -250,6 +262,10 @@ class App(ctk.CTk):
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (10, 185, 129), 2)
                     cv2.putText(frame, info["plate"], (x1, max(0, y1-8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (10, 185, 129), 2)
 
+                # FPS overlay (inst computed from true frame-to-frame time above)
+                fps_ema = (inst if fps_ema is None else alpha * inst + (1 - alpha) * fps_ema)
+                cv2.putText(frame, f"FPS {fps_ema:.1f}", (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (10, 185, 129), 2)
+
                 # Process frame shape & color space in thread
                 fh, fw = frame.shape[:2]
                 cw = max(self.dashboard_tab.canvas.winfo_width(), 640)
@@ -261,15 +277,19 @@ class App(ctk.CTk):
                 rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
                 pil_img = Image.fromarray(rgb)
 
-                self._q.put(("frame", pil_img, det_infos, f"{fw}x{fh}"))
+                self._q.put(("frame", pil_img, det_infos, f"{fw}x{fh}", fps_ema))
                 idx += 1
-                time.sleep(0.01) # Short throttle to ease CPU loading
+                
+                # Backpressure throttle: sleep if UI is slower than stream
+                if self._q.qsize() > 2:
+                    time.sleep(0.01)
             cap.release()
         except Exception as e:
             self._q.put(("error", str(e)))
         finally:
+            if original_imgsz is not None:
+                DetectNP.ANPR_IMGSZ = original_imgsz
             self._q.put(("done",))
-
 
     def _poll(self):
         try:
@@ -277,7 +297,7 @@ class App(ctk.CTk):
                 msg = self._q.get_nowait()
                 kind = msg[0]
                 if kind == "frame":
-                    _, pil_img, det_infos, resolution = msg
+                    _, pil_img, det_infos, resolution, fps = msg
                     self._photo = ImageTk.PhotoImage(pil_img)
                     
                     cw = max(self.dashboard_tab.canvas.winfo_width(), 640)
@@ -285,7 +305,10 @@ class App(ctk.CTk):
                     self.dashboard_tab.canvas.delete("all")
                     self.dashboard_tab.canvas.create_image((cw - pil_img.width) // 2, (ch - pil_img.height) // 2, anchor="nw", image=self._photo)
                     
-                    self.dashboard_tab.lbl_dims.configure(text=resolution)
+                    if fps is not None:
+                        self.dashboard_tab.lbl_dims.configure(text=f"{resolution} | {fps:.1f} FPS")
+                    else:
+                        self.dashboard_tab.lbl_dims.configure(text=resolution)
                     
                     if det_infos:
                         info = det_infos[0]
