@@ -1,0 +1,1 @@
+"""ANPR CustomTkinter GUI package."""
