@@ -1,14 +1,14 @@
 ANPR Evaluation Report
 =======================
-Images total:          10
-Images with GT plate:  22
+Images total:          14
+Images with GT plate:  29
 Negative images:       0
 
-Detection Rate:        95.5%
-Recognition Accuracy:  31.8%
-Mean CER:              0.227
-Precision:             33.3%
-Recall:                31.8%
-F1:                    32.6%
+Detection Rate:        93.1%
+Recognition Accuracy:  65.5%
+Mean CER:              0.163
+Precision:             70.4%
+Recall:                65.5%
+F1:                    67.9%
 
-TP=7  FP=14  FN=15  TN=0
+TP=19  FP=8  FN=10  TN=0
