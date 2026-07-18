@@ -5,7 +5,7 @@ import sys
 DEFAULT_STATE_DICT_PATH = "lp_char_detector_state_dict.pt"
 DEFAULT_ARCH_PATH = "lp_char_detector_arch.json"
 
-ROW_GAP_FRAC = 0.18
+ROW_GAP_FRAC = 0.15
 
 # Real 2-line motorbike plates always split as exactly this shape: line 1
 # is province (2 digits) + series (letter+digit) = 4 characters; line 2 is
@@ -23,13 +23,16 @@ def order_detected_chars(detections, crop_h, row_gap_frac=ROW_GAP_FRAC):
     ("", 0.0, 0) for no detections.
 
     Clustering (for text assembly) always uses the loose crop-height-
-    fraction threshold (matches ocr_it's existing EasyOCR row-grouping
-    constant). A photographed plate is often slightly skewed, so even a
-    genuinely single physical row can split into two visual clusters
-    (e.g. the province+letter group sitting a few pixels higher than the
-    digit group) - the loose threshold correctly separates these clusters
-    so characters are read in the right left-to-right order, rather than
-    interleaving two groups that don't actually share an x-range.
+    fraction threshold (0.15 - lower than ocr_it's separate 0.18 EasyOCR
+    row-grouping constant, tuned down after a real genuine 2-row moto
+    plate had an 18.2px gap on a 116px crop that a 0.18 ratio's 20.9px
+    threshold missed entirely). A photographed plate is often slightly
+    skewed, so even a genuinely single physical row can split into two
+    visual clusters (e.g. the province+letter group sitting a few pixels
+    higher than the digit group) - the loose threshold correctly
+    separates these clusters so characters are read in the right left-
+    to-right order, rather than interleaving two groups that don't
+    actually share an x-range.
 
     The returned row_count (used as physical evidence for car/moto
     disambiguation - see filter_text's row_hint parameter in DetectNP.py)

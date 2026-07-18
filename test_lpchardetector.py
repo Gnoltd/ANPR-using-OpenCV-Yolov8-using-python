@@ -145,6 +145,30 @@ class OrderDetectedCharsTests(unittest.TestCase):
         self.assertEqual(row_count, 2)
         self.assertEqual(text, "29V52108")
 
+    def test_genuine_moto_narrow_gap_still_splits(self):
+        # Real detector output from eval_images_vn/vn-117.jpg's
+        # "29V7-376.94" plate (genuine 2-row moto plate): row1 y-centers
+        # 27.3-44.2, row2 y-centers 62.4-84.7, gap=18.2px on a 116px crop
+        # - just under the old 0.18*crop_h=20.9 threshold, so it was
+        # never split into clusters at all and got flattened into one
+        # scrambled x-sorted "row" (right characters, wrong order:
+        # "32796V974" instead of "29V737694"). The clustering threshold
+        # must be loose enough to catch this real case.
+        detections = [
+            (87.2, 8.6, 124.7, 45.9, "7", 0.9),
+            (70.4, 13.0, 107.9, 48.7, "V", 0.9),
+            (40.0, 22.9, 77.5, 56.9, "9", 0.9),
+            (21.5, 26.7, 59.0, 61.8, "2", 0.9),
+            (106.2, 44.7, 143.7, 80.1, "4", 0.9),
+            (85.1, 50.3, 122.6, 84.8, "9", 0.9),
+            (58.2, 57.4, 95.7, 91.7, "6", 0.9),
+            (38.8, 62.2, 76.3, 97.9, "7", 0.9),
+            (20.2, 68.2, 57.7, 101.3, "3", 0.9),
+        ]
+        text, conf, row_count = order_detected_chars(detections, crop_h=116)
+        self.assertEqual(row_count, 2)
+        self.assertEqual(text, "29V737694")
+
 
 if __name__ == "__main__":
     unittest.main()
