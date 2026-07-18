@@ -33,6 +33,7 @@ class App(ctk.CTk):
         self._worker = None
         self._photo = None
         self._total_plates = 0
+        self._generation = 0
 
         self._build_sidebar()
         self._build_content_area()
@@ -122,19 +123,19 @@ class App(ctk.CTk):
 
     def on_stop(self):
         self._running = False
+        self._generation += 1
         self.dashboard_tab.btn_stop.configure(state="disabled")
         self.dashboard_tab.clear_plate_data()
 
     def _start(self, fn, *args):
-        if self._running:
-            self._running = False
-            if self._worker and self._worker.is_alive():
-                self._worker.join(timeout=1.5)
+        self._running = False
+        self._generation += 1
         self._running = True
-        self._worker = Thread(target=fn, args=args, daemon=True)
+        current_gen = self._generation
+        self._worker = Thread(target=fn, args=(current_gen, *args), daemon=True)
         self._worker.start()
 
-    def _image_worker(self, path):
+    def _image_worker(self, gen, path):
         try:
             data = np.fromfile(path, dtype=np.uint8)
             img = cv2.imdecode(data, cv2.IMREAD_COLOR)
@@ -176,13 +177,15 @@ class App(ctk.CTk):
             resized = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_LINEAR)
             rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
             pil_img = Image.fromarray(rgb)
-            self._q.put(("frame", pil_img, det_infos, f"{fw}x{fh}", None))
+            if gen == self._generation:
+                self._q.put(("frame", pil_img, det_infos, f"{fw}x{fh}", None))
         except Exception as e:
             self._q.put(("error", str(e)))
         finally:
-            self._q.put(("done",))
+            if gen == self._generation:
+                self._q.put(("done",))
 
-    def _stream_worker(self, source):
+    def _stream_worker(self, gen, source):
         original_imgsz = None
         try:
             original_imgsz = DetectNP.ANPR_IMGSZ
@@ -199,7 +202,7 @@ class App(ctk.CTk):
             alpha = 0.2
             prev_frame_tic = time.perf_counter()
 
-            while self._running:
+            while self._running and gen == self._generation:
                 ok, frame = cap.read()
                 if not ok:
                     break
@@ -277,7 +280,8 @@ class App(ctk.CTk):
                 rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
                 pil_img = Image.fromarray(rgb)
 
-                self._q.put(("frame", pil_img, det_infos, f"{fw}x{fh}", fps_ema))
+                if gen == self._generation:
+                    self._q.put(("frame", pil_img, det_infos, f"{fw}x{fh}", fps_ema))
                 idx += 1
                 
                 # Backpressure throttle: sleep if UI is slower than stream
@@ -289,7 +293,8 @@ class App(ctk.CTk):
         finally:
             if original_imgsz is not None:
                 DetectNP.ANPR_IMGSZ = original_imgsz
-            self._q.put(("done",))
+            if gen == self._generation:
+                self._q.put(("done",))
 
     def _poll(self):
         try:
