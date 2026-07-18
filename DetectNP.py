@@ -44,6 +44,9 @@ _RE_PLATE_COMP  = re.compile(r"^([0-9]{2})([A-Z])([0-9]{5})$")
 # Motorbike-style series (letter+digit, e.g. B1/V7/L1/U2/S1/V5), dotted or 4-digit-no-dot body
 _RE_PLATE_MOTO_DOT     = re.compile(r"^([0-9]{2})([A-Z][0-9])-?([0-9]{3})\.?([0-9]{2})$")
 _RE_PLATE_MOTO_COMPACT = re.compile(r"^([0-9]{2})([A-Z][0-9])-?([0-9]{4})$")
+# Special 2-letter series (e.g. LD = joint-venture vehicles), same body shape as car format
+_RE_PLATE_SPECIAL_DOT     = re.compile(r"^([0-9]{2})([A-Z]{2})-?([0-9]{3})\.?([0-9]{2})$")
+_RE_PLATE_SPECIAL_COMPACT = re.compile(r"^([0-9]{2})([A-Z]{2})([0-9]{5})$")
 _RE_PLATE_CLEAN = re.compile(r"[^A-Z0-9\-\.]")
 _RE_NON_ALNUM   = re.compile(r"[^A-Z0-9]")
 
@@ -61,15 +64,21 @@ def _format_moto_compact(m):
     return f"{m.group(1)}{m.group(2)}-{m.group(3)}"
 
 
-# Tried in order: car-dotted, car-compact, moto-dotted, moto-compact. Car
+# Tried in order: car-dotted, car-compact, moto-dotted, moto-compact,
+# special-2-letter-series-dotted, special-2-letter-series-compact. Car
 # patterns are tried first so an ambiguous fully-compact string (no dash,
 # e.g. could be read as 1-letter+5-digit OR 2-char-series+4-digit) resolves
-# to the car interpretation, which is the more common format.
+# to the car interpretation, which is the more common format. The special
+# 2-letter-series patterns never collide with car (wrong total length) or
+# moto (second series character isn't a digit), so their position in this
+# list doesn't affect any other pattern's matches.
 _PLATE_PATTERNS = (
     (_RE_PLATE_FULL, _format_full),
     (_RE_PLATE_COMP, _format_comp),
     (_RE_PLATE_MOTO_DOT, _format_full),
     (_RE_PLATE_MOTO_COMPACT, _format_moto_compact),
+    (_RE_PLATE_SPECIAL_DOT, _format_full),
+    (_RE_PLATE_SPECIAL_COMPACT, _format_comp),
 )
 
 

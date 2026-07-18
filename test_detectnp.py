@@ -64,6 +64,30 @@ class FilterTextMotorbikeFormatTests(unittest.TestCase):
         self.assertEqual(filter_text("29B12345"), "29B-123.45")
 
 
+class FilterTextTwoLetterSeriesFormatTests(unittest.TestCase):
+    # Real 2-letter-series VN plates (e.g. "LD" = joint-venture vehicles),
+    # found via a real detector miss: the pretrained LP character detector
+    # read both of these perfectly (81AA04892, 50LD00454) but strict format
+    # validation rejected them since no existing pattern covered 2-letter
+    # series, forcing a fallback to a much worse EasyOCR read. See
+    # docs/superpowers/notes/2026-07-18-lp-char-detector-eval-results.md.
+    def test_dotted_two_letter_series_plate_passthrough(self):
+        self.assertEqual(filter_text("81AA-048.92"), "81AA-048.92")
+
+    def test_compact_two_letter_series_plate_gets_dash_and_dot(self):
+        self.assertEqual(filter_text("81AA04892"), "81AA-048.92")
+
+    def test_real_eval_sample_ld_series(self):
+        self.assertEqual(filter_text("50LD00454"), "50LD-004.54")
+
+    def test_two_letter_series_does_not_collide_with_car_or_moto(self):
+        # Sanity check: a 2-letter series is unambiguous with the existing
+        # single-letter car pattern (wrong total length) and the letter+
+        # digit moto pattern (second series char isn't a digit).
+        self.assertEqual(filter_text("18A-123.45"), "18A-123.45")
+        self.assertEqual(filter_text("29B1-256.62"), "29B1-256.62")
+
+
 class CanonicalizePlateMotorbikeFormatTests(unittest.TestCase):
     def test_dotted_motorbike_plate(self):
         self.assertEqual(canonicalize_plate("29B1-256.62"), "29B1-256.62")
