@@ -117,6 +117,16 @@ def load_lp_char_detector(state_dict_path=DEFAULT_STATE_DICT_PATH, arch_path=DEF
 
     model = AutoShape(core)
     model.conf = 0.25
+    # Class-agnostic NMS: YOLOv5's default NMS suppresses overlapping boxes
+    # only within the same predicted class, so two near-identical boxes
+    # classified as *different* characters (e.g. a spurious low-confidence
+    # "1" at virtually the same position as a correct high-confidence "7")
+    # both survive. Found via a real duplicate-character misread
+    # (75H1357192 for GT 75H135792 - a genuine extra "1"); class-agnostic
+    # NMS correctly keeps only the higher-confidence box regardless of
+    # its predicted class, since two different characters can never
+    # legitimately occupy the same physical position on a plate.
+    model.agnostic = True
     return model
 
 
