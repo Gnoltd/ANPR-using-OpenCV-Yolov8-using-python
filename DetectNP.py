@@ -9,12 +9,14 @@ from pathlib import Path
 from ANPR_Yolo.env import *
 from ANPR_Yolo.Load import _load_model, _load_ocr
 from ANPR_Yolo.PlateOCR import classify_plate, load_char_classifier
+from ANPR_Yolo.LPCharDetector import load_lp_char_detector, detect_plate_text
 
 Path(SAVE_DIR).mkdir(parents=True, exist_ok=True)
 
 _PRINTED_MODEL_INFO = False
 
 _char_classifier_model = None
+_lp_char_detector_model = None
 
 
 def _get_char_classifier():
@@ -25,6 +27,16 @@ def _get_char_classifier():
         except FileNotFoundError:
             _char_classifier_model = False  # sentinel: tried and unavailable
     return _char_classifier_model or None
+
+
+def _get_lp_char_detector():
+    global _lp_char_detector_model
+    if _lp_char_detector_model is None:
+        try:
+            _lp_char_detector_model = load_lp_char_detector()
+        except FileNotFoundError:
+            _lp_char_detector_model = False  # sentinel: tried and unavailable
+    return _lp_char_detector_model or None
 
 # Compiled plate-format patterns (reused on every frame in video mode)
 _RE_PLATE_FULL  = re.compile(r"^([0-9]{2})([A-Z])-?([0-9]{3})\.?([0-9]{2})$")
@@ -288,6 +300,14 @@ def _scale_to_target_height(crop_bgr, target_h=120):
 def ocr_it(crop_bgr, joiner='-'):
     if crop_bgr is None or crop_bgr.size == 0:
         return "", {"all": [], "best_conf": 0.0}
+
+    lp_detector_model = _get_lp_char_detector()
+    if lp_detector_model is not None:
+        detected_text, detector_conf = detect_plate_text(crop_bgr, lp_detector_model)
+        if detected_text:
+            formatted = filter_text(detected_text, strict=True)
+            if formatted:
+                return formatted, {"all": [], "best_conf": detector_conf}
 
     classifier_model = _get_char_classifier()
     if classifier_model is not None:
