@@ -444,11 +444,24 @@ class App(tk.Tk):
                 self._q.put(("frame", out.copy(), det_infos, None))
             self._q.put(("done",))
 
+    # ANPR_IMGSZ=1280 (env.py default) was tuned for single-photo analysis,
+    # where a ~450ms/frame detection cost doesn't matter. Live video runs
+    # detect_fn on every frame with no skipping, so that same imgsz caps
+    # FPS around 1-2 regardless of OCR throttling. Live video needs
+    # responsiveness more than the crowded-scene recall that imgsz=1280
+    # buys, so the stream loop temporarily lowers it for its own duration.
+    STREAM_IMGSZ = 640
+
     def _stream_worker(self, source):
+        original_imgsz = None
         try:
+            import ANPR_Yolo.DetectNP as DetectNP
             from ANPR_Yolo.DetectNP import (detect_fn, filter_text,
                                              iou as iou_fn, lookup_owner,
                                              ocr_it)
+
+            original_imgsz = DetectNP.ANPR_IMGSZ
+            DetectNP.ANPR_IMGSZ = self.STREAM_IMGSZ
 
             cap = (cv2.VideoCapture(source, cv2.CAP_DSHOW)
                    if isinstance(source, int)
@@ -561,6 +574,9 @@ class App(tk.Tk):
         except Exception as exc:
             self._q.put(("error", str(exc)))
         finally:
+            if original_imgsz is not None:
+                import ANPR_Yolo.DetectNP as DetectNP
+                DetectNP.ANPR_IMGSZ = original_imgsz
             self._q.put(("done",))
 
     # ── Queue → UI (runs on main thread) ─────────────────────────────────────
