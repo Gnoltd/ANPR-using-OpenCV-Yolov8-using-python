@@ -3,10 +3,10 @@ from pathlib import Path
 PLATE_CLASS_NAMES = set()
 BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 WEIGHTS = str(BASE_DIR / "best.pt")
-CONF_THRES = 0.25
+CONF_THRES = 0.1
 IOU_THRES  = 0.45
 ANPR_DEVICE = "cpu"
-ANPR_IMGSZ = 960
+ANPR_IMGSZ = 1280
 ANPR_USE_HALF = 0
 SAVE_DIR = BASE_DIR / "runs" / "anpr_yolo"
 REGISTRY_CSV = str(SAVE_DIR / "vehicle_registry.csv")
