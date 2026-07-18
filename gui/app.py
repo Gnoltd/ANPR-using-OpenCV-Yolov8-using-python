@@ -158,9 +158,16 @@ class App(ctk.CTk):
                 owner = rec["owner_name"] if rec else ""
                 phone = rec["phone"] if rec else ""
                 
-                # Drawing bounding box
+                # Drawing bounding box & label text
                 x1, y1, x2, y2 = d["bbox"]
                 cv2.rectangle(img, (x1, y1), (x2, y2), (10, 185, 129), 2)
+                if plate and owner:
+                    label = f"{plate} | {owner}"
+                elif plate:
+                    label = f"{plate} | Owner : Unknown"
+                else:
+                    label = f"plate {yolo_conf:.2f}"
+                cv2.putText(img, label, (x1, max(0, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (10, 185, 129), 2)
                 
                 det_infos.append({
                     "plate": plate, "yolo_conf": yolo_conf, "ocr_conf": ocr_conf, 
@@ -316,8 +323,7 @@ class App(ctk.CTk):
                         self.dashboard_tab.lbl_dims.configure(text=resolution)
                     
                     if det_infos:
-                        info = det_infos[0]
-                        self.dashboard_tab.set_plate_data(info["plate"], info["yolo_conf"], info["ocr_conf"], info["owner"], info["phone"], info["is_auth"])
+                        self.dashboard_tab.set_plates_data(det_infos)
                     else:
                         self.dashboard_tab.clear_plate_data()
                 elif kind == "error":

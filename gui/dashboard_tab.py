@@ -3,6 +3,54 @@ import tkinter as tk
 from PIL import Image, ImageTk
 import cv2
 
+class VehicleCard(ctk.CTkFrame):
+    def __init__(self, parent, plate, yolo_conf, ocr_conf, owner, phone, is_authorized=False, **kwargs):
+        super().__init__(parent, fg_color="#0c0e17", border_width=1, border_color="#1e293b", corner_radius=8, **kwargs)
+        
+        self.pack(fill="x", padx=5, pady=6)
+        
+        # Header layout
+        hdr_fr = ctk.CTkFrame(self, fg_color="transparent")
+        hdr_fr.pack(fill="x", padx=12, pady=(10, 4))
+        
+        disp_plate = plate if plate else "PLATE DETECTED"
+        lbl_plate = ctk.CTkLabel(hdr_fr, text=disp_plate, font=("JetBrains Mono", 15, "bold"), text_color="#38bdf8" if plate else "#94a3b8")
+        lbl_plate.pack(side="left")
+        
+        status_text = "Authorized" if is_authorized else ("Unknown" if plate else "Locating...")
+        status_color = "#052e16" if is_authorized else ("#450a0a" if plate else "#1e293b")
+        text_color = "#4ade80" if is_authorized else ("#f87171" if plate else "#94a3b8")
+        
+        badge = ctk.CTkLabel(hdr_fr, text=status_text, font=("Inter", 9, "bold"), 
+                             fg_color=status_color, text_color=text_color, 
+                             corner_radius=4, height=18, width=65)
+        badge.pack(side="right")
+        
+        # Owner details box
+        det_fr = ctk.CTkFrame(self, fg_color="#05070d", border_width=1, border_color="#1e293b", corner_radius=6)
+        det_fr.pack(fill="x", padx=12, pady=6)
+        
+        lbl_owner = ctk.CTkLabel(det_fr, text=f"Owner: {owner if owner else 'Unknown'}", font=("Inter", 11), text_color="#e2e8f0", anchor="w")
+        lbl_owner.pack(fill="x", padx=10, pady=3)
+        
+        lbl_phone = ctk.CTkLabel(det_fr, text=f"Phone: {phone if phone else '—'}", font=("Inter", 11), text_color="#e2e8f0", anchor="w")
+        lbl_phone.pack(fill="x", padx=10, pady=(0, 3))
+        
+        # Confidence bars
+        self._build_progress(self, "YOLO Detection Conf", yolo_conf)
+        self._build_progress(self, "EasyOCR Fallback Conf", ocr_conf)
+
+    def _build_progress(self, parent, title, val):
+        prog_fr = ctk.CTkFrame(parent, fg_color="transparent")
+        prog_fr.pack(fill="x", padx=12, pady=(2, 6))
+        
+        lbl = ctk.CTkLabel(prog_fr, text=f"{title}: {val:.0%}", font=("Inter", 10), text_color="#64748b", anchor="w")
+        lbl.pack(fill="x")
+        
+        bar = ctk.CTkProgressBar(prog_fr, height=4, fg_color="#05070d", progress_color="#10b981")
+        bar.pack(fill="x", pady=(2, 2))
+        bar.set(val)
+
 class DashboardTab(ctk.CTkFrame):
     def __init__(self, parent, on_image, on_video, on_webcam, on_stop, **kwargs):
         super().__init__(parent, fg_color="#090a0f", **kwargs)
@@ -54,59 +102,52 @@ class DashboardTab(ctk.CTkFrame):
         self.btn_stop.pack(side="right", padx=2)
 
     def _build_right_monitor(self):
-        mon_fr = ctk.CTkFrame(self, fg_color="#030408", border_width=1, border_color="#1e293b")
-        mon_fr.grid(row=0, column=1, sticky="nsew", padx=(10, 20), pady=20)
+        self.mon_fr = ctk.CTkFrame(self, fg_color="#030408", border_width=1, border_color="#1e293b")
+        self.mon_fr.grid(row=0, column=1, sticky="nsew", padx=(10, 20), pady=20)
         
-        ctk.CTkLabel(mon_fr, text="Live Plate Monitor", font=("Inter", 13, "bold"), text_color="#64748b").pack(anchor="w", padx=15, pady=10)
+        ctk.CTkLabel(self.mon_fr, text="Live Plate Monitor", font=("Inter", 13, "bold"), text_color="#64748b").pack(anchor="w", padx=15, pady=10)
 
-        # Active plate display
-        self.lbl_plate = ctk.CTkLabel(mon_fr, text="NO PLATES", font=("JetBrains Mono", 18, "bold"), text_color="#94a3b8")
-        self.lbl_plate.pack(anchor="w", padx=15, pady=5)
-        
-        self.lbl_status = ctk.CTkLabel(mon_fr, text="System Standby", font=("Inter", 12), text_color="#64748b")
-        self.lbl_status.pack(anchor="w", padx=15, pady=(0, 10))
+        # Scrollable container for vehicle cards
+        self.cards_scroll = ctk.CTkScrollableFrame(self.mon_fr, fg_color="transparent")
+        self.cards_scroll.pack(fill="both", expand=True, padx=5, pady=(0, 10))
 
-        # Details
-        self.details_fr = ctk.CTkFrame(mon_fr, fg_color="#0d111a", border_width=1, border_color="#1e293b")
-        self.details_fr.pack(fill="x", padx=15, pady=10)
-        
-        self.lbl_owner = ctk.CTkLabel(self.details_fr, text="Owner: —", font=("Inter", 12), text_color="#e2e8f0")
-        self.lbl_owner.pack(anchor="w", padx=10, pady=4)
-        
-        self.lbl_phone = ctk.CTkLabel(self.details_fr, text="Phone: —", font=("Inter", 12), text_color="#e2e8f0")
-        self.lbl_phone.pack(anchor="w", padx=10, pady=4)
+        self.clear_plate_data()
 
-        # Confidence meters
-        self.yolo_bar = self._build_progress_row(mon_fr, "YOLO Detection Conf")
-        self.ocr_bar = self._build_progress_row(mon_fr, "EasyOCR Fallback Conf")
+    def set_plates_data(self, det_infos):
+        # Clear existing cards
+        for child in self.cards_scroll.winfo_children():
+            child.destroy()
+            
+        if not det_infos:
+            lbl_placeholder = ctk.CTkLabel(self.cards_scroll, text="No plates detected", font=("Inter", 12), text_color="#64748b")
+            lbl_placeholder.pack(pady=40)
+            return
 
-    def _build_progress_row(self, parent, title) -> ctk.CTkProgressBar:
-        ctk.CTkLabel(parent, text=title, font=("Inter", 11), text_color="#64748b").pack(anchor="w", padx=15, pady=(10, 0))
-        bar = ctk.CTkProgressBar(parent, height=6, fg_color="#0f172a", progress_color="#10b981")
-        bar.pack(fill="x", padx=15, pady=(2, 10))
-        bar.set(0.0)
-        return bar
+        for info in det_infos:
+            VehicleCard(
+                self.cards_scroll,
+                plate=info.get("plate", ""),
+                yolo_conf=info.get("yolo_conf", 0.0),
+                ocr_conf=info.get("ocr_conf", 0.0),
+                owner=info.get("owner", ""),
+                phone=info.get("phone", ""),
+                is_authorized=info.get("is_auth", False)
+            )
 
     def set_plate_data(self, plate, yolo_conf, ocr_conf, owner, phone, is_authorized=False):
-        self.lbl_plate.configure(text=plate if plate else "PLATE DETECTED")
-        self.lbl_plate.configure(text_color="#38bdf8" if plate else "#94a3b8")
-        
-        if is_authorized:
-            self.lbl_status.configure(text="Authorized Access", text_color="#10b981")
-        elif plate:
-            self.lbl_status.configure(text="Unknown Vehicle", text_color="#ef4444")
-        else:
-            self.lbl_status.configure(text="Locating Plate...", text_color="#e2e8f0")
-
-        self.lbl_owner.configure(text=f"Owner: {owner if owner else 'Unknown'}")
-        self.lbl_phone.configure(text=f"Phone: {phone if phone else '—'}")
-        self.yolo_bar.set(yolo_conf)
-        self.ocr_bar.set(ocr_conf)
+        # Backward compatibility fallback
+        info = {
+            "plate": plate,
+            "yolo_conf": yolo_conf,
+            "ocr_conf": ocr_conf,
+            "owner": owner,
+            "phone": phone,
+            "is_auth": is_authorized
+        }
+        self.set_plates_data([info])
 
     def clear_plate_data(self):
-        self.lbl_plate.configure(text="NO PLATES", text_color="#94a3b8")
-        self.lbl_status.configure(text="System Standby", text_color="#64748b")
-        self.lbl_owner.configure(text="Owner: —")
-        self.lbl_phone.configure(text="Phone: —")
-        self.yolo_bar.set(0.0)
-        self.ocr_bar.set(0.0)
+        for child in self.cards_scroll.winfo_children():
+            child.destroy()
+        lbl_placeholder = ctk.CTkLabel(self.cards_scroll, text="System Standby", font=("Inter", 12), text_color="#64748b")
+        lbl_placeholder.pack(pady=40)
