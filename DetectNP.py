@@ -64,14 +64,26 @@ def _format_moto_compact(m):
     return f"{m.group(1)}{m.group(2)}-{m.group(3)}"
 
 
-# Tried in order: car-dotted, car-compact, moto-dotted, moto-compact,
-# special-2-letter-series-dotted, special-2-letter-series-compact. Car
-# patterns are tried first so an ambiguous fully-compact string (no dash,
-# e.g. could be read as 1-letter+5-digit OR 2-char-series+4-digit) resolves
-# to the car interpretation, which is the more common format. The special
-# 2-letter-series patterns never collide with car (wrong total length) or
-# moto (second series character isn't a digit), so their position in this
-# list doesn't affect any other pattern's matches.
+# Real car plates are physically always 1 row; real moto plates using the
+# letter+digit series shape are physically always 2 rows. Grouped so a
+# row_hint (from physical evidence - how many text rows a detector actually
+# found) can reorder which group is tried first for a genuinely ambiguous
+# compact string, without ever rejecting a match neither group can produce.
+_CAR_LIKE_PATTERNS = (
+    (_RE_PLATE_FULL, _format_full),
+    (_RE_PLATE_COMP, _format_comp),
+    (_RE_PLATE_SPECIAL_DOT, _format_full),
+    (_RE_PLATE_SPECIAL_COMPACT, _format_comp),
+)
+_MOTO_LIKE_PATTERNS = (
+    (_RE_PLATE_MOTO_DOT, _format_full),
+    (_RE_PLATE_MOTO_COMPACT, _format_moto_compact),
+)
+# Default trial order (no row_hint): car-dotted, car-compact, moto-dotted,
+# moto-compact, special-dotted, special-compact. Car patterns first so an
+# ambiguous fully-compact string (no dash, e.g. could be read as
+# 1-letter+5-digit OR 2-char-series+4-digit) resolves to the car
+# interpretation, which is the more common format.
 _PLATE_PATTERNS = (
     (_RE_PLATE_FULL, _format_full),
     (_RE_PLATE_COMP, _format_comp),
@@ -82,10 +94,20 @@ _PLATE_PATTERNS = (
 )
 
 
-def _match_plate_format(t):
+def _match_plate_format(t, row_hint=None):
     """Try each known plate pattern against t; return the formatted plate
-    string (e.g. "18A-123.45" or "29B1-256.62") or None if none match."""
-    for pat, formatter in _PLATE_PATTERNS:
+    string (e.g. "18A-123.45" or "29B1-256.62") or None if none match.
+
+    row_hint, when given (1 or 2), is physical evidence of how many text
+    rows the plate was actually read as - not a filter, just a trial-order
+    preference: a 2-row hint tries moto-shaped patterns before car-shaped
+    ones (real car plates are never 2 physical rows), which only changes
+    the outcome for a string ambiguous between both shapes."""
+    if row_hint == 2:
+        order = _MOTO_LIKE_PATTERNS + _CAR_LIKE_PATTERNS
+    else:
+        order = _PLATE_PATTERNS
+    for pat, formatter in order:
         m = pat.match(t)
         if m:
             return formatter(m)
@@ -169,7 +191,7 @@ def detect_fn(image_bgr):
         })
     return dets
 
-def filter_text(text, strict=False):
+def filter_text(text, strict=False, row_hint=None):
     if not text:
         return ""
 
@@ -177,7 +199,7 @@ def filter_text(text, strict=False):
     t = t.replace("—", "-").replace("–", "-").replace("_", "-").replace(" ", "")
     t = _RE_PLATE_CLEAN.sub("", t)
 
-    matched = _match_plate_format(t)
+    matched = _match_plate_format(t, row_hint=row_hint)
     if matched:
         return matched
 
@@ -186,7 +208,7 @@ def filter_text(text, strict=False):
         c_fix = digit_to_letter.get(t[2])
         if c_fix:
             t2 = t[:2] + c_fix + t[3:]
-            matched = _match_plate_format(t2)
+            matched = _match_plate_format(t2, row_hint=row_hint)
             if matched:
                 return matched
 
@@ -312,9 +334,9 @@ def ocr_it(crop_bgr, joiner='-'):
 
     lp_detector_model = _get_lp_char_detector()
     if lp_detector_model is not None:
-        detected_text, detector_conf = detect_plate_text(crop_bgr, lp_detector_model)
+        detected_text, detector_conf, row_count = detect_plate_text(crop_bgr, lp_detector_model)
         if detected_text:
-            formatted = filter_text(detected_text, strict=True)
+            formatted = filter_text(detected_text, strict=True, row_hint=row_count)
             if formatted:
                 return formatted, {"all": [], "best_conf": detector_conf}
 

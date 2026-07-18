@@ -12,11 +12,15 @@ def order_detected_chars(detections, crop_h, row_gap_frac=ROW_GAP_FRAC):
     """detections: list of (x1, y1, x2, y2, char, conf) tuples, any order.
     Groups into 1+ rows by vertical center (top-to-bottom), sorts each row
     left-to-right by horizontal center, and concatenates. Returns
-    (text, min_confidence) or ("", 0.0) for no detections. Row grouping
-    threshold matches ocr_it's existing EasyOCR row-grouping constant
-    (0.18 * crop height) for consistency with the rest of this codebase."""
+    (text, min_confidence, row_count), or ("", 0.0, 0) for no detections.
+    Row grouping threshold matches ocr_it's existing EasyOCR row-grouping
+    constant (0.18 * crop height) for consistency with the rest of this
+    codebase. row_count is physical evidence (how many distinct text rows
+    were actually found) usable to disambiguate car-vs-moto formatting for
+    a compact string that's ambiguous by character count alone - see
+    filter_text's row_hint parameter in DetectNP.py."""
     if not detections:
-        return "", 0.0
+        return "", 0.0, 0
 
     items = []
     confs = []
@@ -38,7 +42,7 @@ def order_detected_chars(detections, crop_h, row_gap_frac=ROW_GAP_FRAC):
         row_sorted = sorted(row, key=lambda t: t[1])
         text += "".join(ch for _y, _x, ch in row_sorted)
 
-    return text, min(confs)
+    return text, min(confs), len(rows)
 
 
 def load_lp_char_detector(state_dict_path=DEFAULT_STATE_DICT_PATH, arch_path=DEFAULT_ARCH_PATH):
@@ -87,9 +91,9 @@ def load_lp_char_detector(state_dict_path=DEFAULT_STATE_DICT_PATH, arch_path=DEF
 
 def detect_plate_text(crop_bgr, model):
     """Runs the character detector on a plate crop and returns (text,
-    min_confidence), or ("", 0.0) if nothing was detected."""
+    min_confidence, row_count), or ("", 0.0, 0) if nothing was detected."""
     if crop_bgr is None or crop_bgr.size == 0:
-        return "", 0.0
+        return "", 0.0, 0
 
     results = model(crop_bgr)
     preds = results.pred[0]

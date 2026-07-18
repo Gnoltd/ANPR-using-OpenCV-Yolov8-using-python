@@ -63,6 +63,28 @@ class FilterTextMotorbikeFormatTests(unittest.TestCase):
         # in this exact shape (2-char series + exactly 4 digits, no dash).
         self.assertEqual(filter_text("29B12345"), "29B-123.45")
 
+    def test_row_hint_two_prefers_moto_interpretation_of_ambiguous_string(self):
+        # Same "29B12345" ambiguity as above, but when the caller knows
+        # (from physical evidence - the plate was detected/read as 2
+        # distinct rows) that this is a 2-row plate, that's decisive:
+        # real car plates are always 1 row, so a 2-row hint should prefer
+        # the moto interpretation instead of the default car-first order.
+        self.assertEqual(filter_text("29B12345", row_hint=2), "29B1-2345")
+
+    def test_row_hint_one_keeps_default_car_preference(self):
+        self.assertEqual(filter_text("29B12345", row_hint=1), "29B-123.45")
+
+    def test_row_hint_none_keeps_default_car_preference(self):
+        self.assertEqual(filter_text("29B12345", row_hint=None), "29B-123.45")
+
+    def test_row_hint_two_does_not_affect_unambiguous_special_series_string(self):
+        # A row_hint of 2 only changes trial ORDER, never rejects a match.
+        # An 8-char compact string is always ambiguous between car and
+        # moto-compact (same digit/letter shape either way), but a 2-letter
+        # special-series string (letter at the position moto requires a
+        # digit) never matches any moto pattern - unaffected by row_hint.
+        self.assertEqual(filter_text("81AA04892", row_hint=2), "81AA-048.92")
+
 
 class FilterTextTwoLetterSeriesFormatTests(unittest.TestCase):
     # Real 2-letter-series VN plates (e.g. "LD" = joint-venture vehicles),
@@ -271,7 +293,7 @@ class OcrItClassifierFallbackTests(unittest.TestCase):
         import DetectNP
         fake_model = MagicMock()
         with patch("DetectNP._get_lp_char_detector", return_value=fake_model), \
-             patch("DetectNP.detect_plate_text", return_value=("18A12345", 0.9)), \
+             patch("DetectNP.detect_plate_text", return_value=("18A12345", 0.9, 1)), \
              patch("DetectNP._get_char_classifier") as mock_get_classifier:
             # The old CNN classifier path must not even be consulted once
             # the LP detector (higher priority, proven far more accurate)
@@ -286,7 +308,7 @@ class OcrItClassifierFallbackTests(unittest.TestCase):
         fake_lp_model = MagicMock()
         fake_classifier_model = MagicMock()
         with patch("DetectNP._get_lp_char_detector", return_value=fake_lp_model), \
-             patch("DetectNP.detect_plate_text", return_value=("", 0.0)), \
+             patch("DetectNP.detect_plate_text", return_value=("", 0.0, 0)), \
              patch("DetectNP._get_char_classifier", return_value=fake_classifier_model), \
              patch("DetectNP.classify_plate", return_value=("18A12345", 0.9)):
             crop = np.zeros((60, 200, 3), dtype=np.uint8)

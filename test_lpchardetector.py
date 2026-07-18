@@ -31,9 +31,10 @@ class OrderDetectedCharsTests(unittest.TestCase):
             (10, 10, 30, 40, "1", 0.9),
             (40, 10, 60, 40, "8", 0.9),
         ]
-        text, conf = order_detected_chars(detections, crop_h=50)
+        text, conf, row_count = order_detected_chars(detections, crop_h=50)
         self.assertEqual(text, "18A")
         self.assertAlmostEqual(conf, 0.9)
+        self.assertEqual(row_count, 1)
 
     def test_two_rows_grouped_and_ordered_top_to_bottom(self):
         # crop_h=100, row_gap_frac=0.18 -> threshold=18. Row1 y-center=20,
@@ -51,21 +52,23 @@ class OrderDetectedCharsTests(unittest.TestCase):
             (70, 10, 90, 30, "1", 0.91),   # row1, x_c=80
             (10, 10, 30, 30, "2", 0.95),   # row1, x_c=20
         ]
-        text, conf = order_detected_chars(detections, crop_h=100)
+        text, conf, row_count = order_detected_chars(detections, crop_h=100)
         self.assertEqual(text, "29B125662")
+        self.assertEqual(row_count, 2)
 
     def test_min_confidence_returned(self):
         detections = [
             (10, 10, 30, 40, "1", 0.9),
             (40, 10, 60, 40, "8", 0.3),
         ]
-        text, conf = order_detected_chars(detections, crop_h=50)
+        text, conf, row_count = order_detected_chars(detections, crop_h=50)
         self.assertAlmostEqual(conf, 0.3)
 
     def test_empty_detections_returns_empty(self):
-        text, conf = order_detected_chars([], crop_h=50)
+        text, conf, row_count = order_detected_chars([], crop_h=50)
         self.assertEqual(text, "")
         self.assertEqual(conf, 0.0)
+        self.assertEqual(row_count, 0)
 
 
 if __name__ == "__main__":
