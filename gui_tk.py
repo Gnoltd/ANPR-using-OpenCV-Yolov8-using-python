@@ -498,13 +498,20 @@ class App(tk.Tk):
             idx = 0
             fps_ema = None
             alpha = 0.2
+            # Measures true frame-to-frame time (cap.read() wait + all
+            # processing), not just this iteration's active compute time -
+            # the latter drops to near-zero on skipped (redraw-only)
+            # frames, making 1/elapsed blow up to tens of thousands.
+            prev_frame_tic = time.perf_counter()
 
             while self._running:
                 ok, frame = cap.read()
                 if not ok:
                     break
 
-                tic = time.perf_counter()
+                now = time.perf_counter()
+                inst = 1.0 / max(1e-6, now - prev_frame_tic)
+                prev_frame_tic = now
                 do_detect = (idx - last_detect_idx) >= detect_every_n
 
                 if do_detect:
@@ -593,8 +600,7 @@ class App(tk.Tk):
                     cv2.putText(frame, label, (x1, max(0, y1 - 8)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-                # FPS overlay
-                inst = 1.0 / max(1e-6, time.perf_counter() - tic)
+                # FPS overlay (inst computed from true frame-to-frame time above)
                 fps_ema = (inst if fps_ema is None
                            else alpha * inst + (1 - alpha) * fps_ema)
                 cv2.putText(frame, f"FPS {fps_ema:.1f}", (8, 24),
