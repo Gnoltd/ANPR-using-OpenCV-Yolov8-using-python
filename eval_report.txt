@@ -4,11 +4,11 @@ Images total:          27
 Images with GT plate:  27
 Negative images:       0
 
-Detection Rate:        92.6%
-Recognition Accuracy:  11.1%
-Mean CER:              0.653
-Precision:             12.0%
-Recall:                11.1%
-F1:                    11.5%
+Detection Rate:        96.3%
+Recognition Accuracy:  14.8%
+Mean CER:              0.688
+Precision:             14.3%
+Recall:                14.8%
+F1:                    14.5%
 
-TP=3  FP=22  FN=24  TN=0
+TP=4  FP=24  FN=23  TN=0
