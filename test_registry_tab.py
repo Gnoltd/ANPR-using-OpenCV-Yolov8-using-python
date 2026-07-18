@@ -43,20 +43,15 @@ class TestRegistryTab(unittest.TestCase):
             {"plate": "29D1-999.99", "owner_name": "Nguyen Test", "phone": "090000000", "notes": "Test note", "photo": "", "plate_norm": "29D199999"}
         ])
         
-        # Wait, since from gui.registry_tab import RegistryTab will run, it imports load_registry
-        # Let's mock it
-        with patch("DetectNP.load_registry", return_value=dummy_df):
-            with patch("DetectNP.save_registry") as mock_save:
-                try:
-                    from gui.registry_tab import RegistryTab
-                    tab = RegistryTab(self.root)
-                    tab.plate_var.set("29D1-999.99")
-                    tab.owner_name_var.set("Nguyen Test Updated")
-                    tab.phone_var.set("090000000")
-                    tab.notes_var.set("Test note updated")
-                    
-                    # Simulate saving
-                    tab.on_save_record()
-                    self.assertTrue(mock_save.called)
-                except ImportError as e:
-                    self.fail(f"Failing to import RegistryTab: {e}")
+        from gui.registry_tab import RegistryTab
+        with patch("gui.registry_tab.load_registry", return_value=dummy_df):
+            with patch("gui.registry_tab.save_registry") as mock_save:
+                tab = RegistryTab(self.root)
+                tab.plate_var.set("29D1-999.99")
+                tab.owner_name_var.set("Nguyen Test Updated")
+                tab.phone_var.set("090000000")
+                tab.notes_var.set("Test note updated")
+                
+                # Simulate saving
+                tab.on_save_record()
+                self.assertTrue(mock_save.called)
