@@ -288,39 +288,25 @@ class LookupOwnerRegistryCorrectionTests(unittest.TestCase):
             self.assertEqual(result["owner_name"], "Nguyen Van A")
 
 
-class OcrItClassifierFallbackTests(unittest.TestCase):
+class OcrItLpDetectorFallbackTests(unittest.TestCase):
     def test_uses_lp_detector_result_when_confident(self):
         import DetectNP
         fake_model = MagicMock()
         with patch("DetectNP._get_lp_char_detector", return_value=fake_model), \
              patch("DetectNP.detect_plate_text", return_value=("18A12345", 0.9, 1)), \
-             patch("DetectNP._get_char_classifier") as mock_get_classifier:
-            # The old CNN classifier path must not even be consulted once
-            # the LP detector (higher priority, proven far more accurate)
+             patch("DetectNP._load_ocr") as mock_load_ocr:
+            # _load_ocr must not even be called once the LP detector
             # already returns a confident, well-formatted result.
             crop = np.zeros((60, 200, 3), dtype=np.uint8)
             text, info = DetectNP.ocr_it(crop)
         self.assertEqual(text, "18A-123.45")  # formatted via filter_text
-        mock_get_classifier.assert_not_called()
+        mock_load_ocr.assert_not_called()
 
-    def test_falls_back_to_classifier_when_lp_detector_not_confident(self):
+    def test_falls_back_to_easyocr_when_lp_detector_not_confident(self):
         import DetectNP
         fake_lp_model = MagicMock()
-        fake_classifier_model = MagicMock()
         with patch("DetectNP._get_lp_char_detector", return_value=fake_lp_model), \
              patch("DetectNP.detect_plate_text", return_value=("", 0.0, 0)), \
-             patch("DetectNP._get_char_classifier", return_value=fake_classifier_model), \
-             patch("DetectNP.classify_plate", return_value=("18A12345", 0.9)):
-            crop = np.zeros((60, 200, 3), dtype=np.uint8)
-            text, info = DetectNP.ocr_it(crop)
-        self.assertEqual(text, "18A-123.45")
-
-    def test_falls_back_to_easyocr_when_classifier_not_confident(self):
-        import DetectNP
-        fake_model = MagicMock()
-        with patch("DetectNP._get_lp_char_detector", return_value=None), \
-             patch("DetectNP._get_char_classifier", return_value=fake_model), \
-             patch("DetectNP.classify_plate", return_value=("", 0.0)), \
              patch("DetectNP._load_ocr") as mock_load_ocr:
             mock_reader = MagicMock()
             mock_reader.readtext.return_value = []
@@ -328,6 +314,17 @@ class OcrItClassifierFallbackTests(unittest.TestCase):
             crop = np.zeros((60, 200, 3), dtype=np.uint8)
             text, info = DetectNP.ocr_it(crop)
         mock_reader.readtext.assert_called()  # fallback path was actually reached
+
+    def test_falls_back_to_easyocr_when_lp_detector_unavailable(self):
+        import DetectNP
+        with patch("DetectNP._get_lp_char_detector", return_value=None), \
+             patch("DetectNP._load_ocr") as mock_load_ocr:
+            mock_reader = MagicMock()
+            mock_reader.readtext.return_value = []
+            mock_load_ocr.return_value = mock_reader
+            crop = np.zeros((60, 200, 3), dtype=np.uint8)
+            text, info = DetectNP.ocr_it(crop)
+        mock_reader.readtext.assert_called()
 
 
 if __name__ == "__main__":
