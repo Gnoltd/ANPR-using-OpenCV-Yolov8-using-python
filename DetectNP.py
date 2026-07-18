@@ -157,7 +157,7 @@ def detect_fn(image_bgr):
         cls_id = int(box.cls[0]) if box.cls is not None else -1
         cls_name = names.get(cls_id, str(cls_id)) if isinstance(names, dict) else str(cls_id)
 
-        # Clamp về trong ảnh
+        
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(x2, w - 1), min(y2, h - 1)
 
