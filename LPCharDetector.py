@@ -7,18 +7,42 @@ DEFAULT_ARCH_PATH = "lp_char_detector_arch.json"
 
 ROW_GAP_FRAC = 0.18
 
+# Real 2-line motorbike plates always split as exactly this shape: line 1
+# is province (2 digits) + series (letter+digit) = 4 characters; line 2 is
+# the body, 4 digits (compact) or 5 digits (dotted). Matches
+# _MOTO_ROW1_COUNT / _MOTO_ROW2_COUNTS in DetectNP.py / PlateOCR.py.
+_MOTO_ROW1_COUNT = 4
+_MOTO_ROW2_COUNTS = (4, 5)
+
 
 def order_detected_chars(detections, crop_h, row_gap_frac=ROW_GAP_FRAC):
     """detections: list of (x1, y1, x2, y2, char, conf) tuples, any order.
-    Groups into 1+ rows by vertical center (top-to-bottom), sorts each row
-    left-to-right by horizontal center, and concatenates. Returns
-    (text, min_confidence, row_count), or ("", 0.0, 0) for no detections.
-    Row grouping threshold matches ocr_it's existing EasyOCR row-grouping
-    constant (0.18 * crop height) for consistency with the rest of this
-    codebase. row_count is physical evidence (how many distinct text rows
-    were actually found) usable to disambiguate car-vs-moto formatting for
-    a compact string that's ambiguous by character count alone - see
-    filter_text's row_hint parameter in DetectNP.py."""
+    Groups into 1+ visual clusters (top-to-bottom) by vertical center,
+    sorts each cluster left-to-right by horizontal center, and
+    concatenates. Returns (text, min_confidence, row_count), or
+    ("", 0.0, 0) for no detections.
+
+    Clustering (for text assembly) always uses the loose crop-height-
+    fraction threshold (matches ocr_it's existing EasyOCR row-grouping
+    constant). A photographed plate is often slightly skewed, so even a
+    genuinely single physical row can split into two visual clusters
+    (e.g. the province+letter group sitting a few pixels higher than the
+    digit group) - the loose threshold correctly separates these clusters
+    so characters are read in the right left-to-right order, rather than
+    interleaving two groups that don't actually share an x-range.
+
+    The returned row_count (used as physical evidence for car/moto
+    disambiguation - see filter_text's row_hint parameter in DetectNP.py)
+    only trusts a 2-cluster split as a genuine second physical text row
+    if the cluster sizes match a real moto plate's fixed shape (exactly
+    4 characters in the first cluster, 4 or 5 in the second). A pixel-
+    geometry heuristic (gap vs. average character height) was tried first
+    and found unreliable on real data: a skewed single-row car plate's
+    cluster gap-to-height ratio (1.067) was actually LARGER than a
+    genuine 2-row moto plate's ratio (0.994) elsewhere in this eval set -
+    the two cases are not geometrically separable, only content-
+    separable, since real moto plates have a fixed, known layout shape
+    that skew artifacts don't reproduce."""
     if not detections:
         return "", 0.0, 0
 
@@ -29,10 +53,11 @@ def order_detected_chars(detections, crop_h, row_gap_frac=ROW_GAP_FRAC):
         confs.append(conf)
 
     items.sort(key=lambda t: t[0])
-    row_thresh = max(8, row_gap_frac * crop_h)
+
+    text_row_thresh = max(8, row_gap_frac * crop_h)
     rows = []
     for y, x, ch in items:
-        if not rows or abs(y - rows[-1][-1][0]) > row_thresh:
+        if not rows or (y - rows[-1][-1][0]) > text_row_thresh:
             rows.append([(y, x, ch)])
         else:
             rows[-1].append((y, x, ch))
@@ -42,7 +67,13 @@ def order_detected_chars(detections, crop_h, row_gap_frac=ROW_GAP_FRAC):
         row_sorted = sorted(row, key=lambda t: t[1])
         text += "".join(ch for _y, _x, ch in row_sorted)
 
-    return text, min(confs), len(rows)
+    if (len(rows) == 2 and len(rows[0]) == _MOTO_ROW1_COUNT
+            and len(rows[1]) in _MOTO_ROW2_COUNTS):
+        row_count = 2
+    else:
+        row_count = 1
+
+    return text, min(confs), row_count
 
 
 def load_lp_char_detector(state_dict_path=DEFAULT_STATE_DICT_PATH, arch_path=DEFAULT_ARCH_PATH):
